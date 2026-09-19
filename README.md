@@ -41,3 +41,27 @@ Confirmed against the club's official matchcenter at
 
 Clock times in the fallback snapshot are the club's local kick-off times (EEST,
 UTC+3); the `datetime_utc` values are the corresponding UTC instants.
+
+# Arithmetic calculator
+
+`calculator.py` is a small, dependency-free arithmetic calculator supporting
+`+ - * / % ^`, parentheses and unary sign. `^` is right-associative and binds
+tighter than unary minus (`-2^2` is `-4`).
+
+## Usage
+
+```bash
+python3 calculator.py "2 + 3 * 4"          # 14
+python3 calculator.py "(2 + 3) * 4" --json # {"expression": "...", "result": 20}
+echo "10 / 4" | python3 calculator.py      # 2.5
+python3 calculator.py                      # interactive prompt
+```
+
+Malformed input and division by zero raise `CalculatorError` and make the CLI
+exit non-zero.
+
+## Tests
+
+```bash
+python3 -m unittest -v test_calculator.py
+```
