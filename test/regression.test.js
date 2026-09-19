@@ -100,6 +100,35 @@ test('a ghost eaten mid-tile re-centres instead of being stranded off-grid', () 
   assert.ok(ghost.y >= 0);
 });
 
+test('an eaten ghost reaches the house and revives from every walkable tile', () => {
+  let checked = 0;
+  for (let y = 0; y < ROWS; y += 1) {
+    for (let x = 0; x < COLS; x += 1) {
+      if (!maze.isWalkable(x, y)) continue;
+      checked += 1;
+
+      const game = playingGame();
+      const ghost = game.ghosts[0];
+      game.ghosts = [ghost];
+      ghost.inHouse = false;
+      ghost.exiting = false;
+      ghost.eaten = true;
+      ghost.x = x * UNIT;
+      ghost.y = y * UNIT;
+      ghost.dir = DIR.UP;
+
+      let revived = false;
+      for (let i = 0; i < 600 && !revived; i += 1) {
+        update(game);
+        revived = !ghost.eaten;
+      }
+      assert.ok(revived, `eaten ghost from (${x},${y}) never revived`);
+      assert.ok(game.events.includes('ghostRevive'), `no ghostRevive event from (${x},${y})`);
+    }
+  }
+  assert.ok(checked > 300, `expected many walkable tiles, checked ${checked}`);
+});
+
 test('a mid-tile frightened transition cannot push a ghost through a wall', () => {
   const game = playingGame();
   const ghost = game.ghosts[0];

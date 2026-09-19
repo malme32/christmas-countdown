@@ -144,6 +144,17 @@ test('clearing the final level wins the game', () => {
   assert.ok(drainEvents(game).includes('win'));
 });
 
+test('the level counter does not run past MAX_LEVELS on a win', () => {
+  const game = playingGame();
+  game.level = MAX_LEVELS;
+  game.pellets = new Set();
+  game.powerPellets = new Set();
+  update(game);
+  for (let i = 0; i < LEVEL_COMPLETE_TICKS; i += 1) update(game);
+  assert.equal(game.status, 'won');
+  assert.equal(game.level, MAX_LEVELS);
+});
+
 test('restart returns the game to its initial state', () => {
   const game = playingGame();
   game.score = 1234;

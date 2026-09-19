@@ -151,12 +151,12 @@ function afterDeath(game) {
 }
 
 function nextLevel(game) {
-  game.level += 1;
-  if (game.level > MAX_LEVELS) {
+  if (game.level >= MAX_LEVELS) {
     game.status = 'won';
     game.events.push('win');
     return;
   }
+  game.level += 1;
   game.pellets = new Set(game.maze.pellets);
   game.powerPellets = new Set(game.maze.powerPellets);
   resetPositions(game);

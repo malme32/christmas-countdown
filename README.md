@@ -40,7 +40,7 @@ npm test
 
 ## Rules and data model
 
-- 28x31 tile maze with 240 pellets and 4 power pellets.
+- 28x31 tile maze with 238 pellets and 4 power pellets (242 in total).
 - One player and four ghosts (Blinky, Pinky, Inky, Clyde) with scatter/chase
   targeting and a frightened state after a power pellet.
 - Scoring: pellet 10, power pellet 50, frightened ghosts 200/400/800/1600.

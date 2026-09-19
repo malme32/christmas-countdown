@@ -108,7 +108,6 @@ export function updateGhost(ghost, ctx) {
       } else {
         ghost.dir = chooseDirection(maze, tile, ghost.dir, ctx.houseTile, {
           allowDoor: true,
-          allowReverse: true,
         });
       }
     }
