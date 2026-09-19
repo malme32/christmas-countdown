@@ -8,15 +8,20 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
-from datetime import date
+from datetime import date, timedelta
 from http.client import HTTPMessage
 
 from christmas_countdown import (
+    bank_holidays_between,
+    calendar_page,
     countdown_page,
     countdown_summary,
     create_server,
+    greek_holidays,
     is_working_day,
+    months_between,
     next_christmas,
+    orthodox_easter,
     weekend_days_between,
     working_days_between,
 )
@@ -68,20 +73,115 @@ class WorkingDayTests(unittest.TestCase):
         )
 
 
+class OrthodoxEasterTests(unittest.TestCase):
+    def test_known_dates(self) -> None:
+        self.assertEqual(orthodox_easter(2023), date(2023, 4, 16))
+        self.assertEqual(orthodox_easter(2024), date(2024, 5, 5))
+        self.assertEqual(orthodox_easter(2025), date(2025, 4, 20))
+        self.assertEqual(orthodox_easter(2026), date(2026, 4, 12))
+
+    def test_always_a_sunday(self) -> None:
+        for year in range(2000, 2031):
+            self.assertEqual(orthodox_easter(year).weekday(), 6, year)
+
+
+class GreekHolidayTests(unittest.TestCase):
+    def test_fixed_holidays_are_present(self) -> None:
+        holidays = greek_holidays(2026)
+        self.assertEqual(holidays[date(2026, 1, 1)], "New Year's Day")
+        self.assertEqual(holidays[date(2026, 3, 25)], "Independence Day")
+        self.assertEqual(holidays[date(2026, 10, 28)], "Ochi Day")
+        self.assertEqual(holidays[date(2026, 12, 25)], "Christmas Day")
+        self.assertEqual(holidays[date(2026, 12, 26)], "Second Day of Christmas")
+
+    def test_movable_holidays_follow_easter(self) -> None:
+        easter = orthodox_easter(2026)
+        holidays = greek_holidays(2026)
+        self.assertEqual(holidays[easter - timedelta(days=48)], "Clean Monday")
+        self.assertEqual(holidays[easter - timedelta(days=2)], "Good Friday")
+        self.assertEqual(holidays[easter], "Easter Sunday")
+        self.assertEqual(holidays[easter + timedelta(days=1)], "Easter Monday")
+        self.assertEqual(holidays[easter + timedelta(days=50)], "Holy Spirit Monday")
+
+    def test_clean_monday_and_holy_spirit_are_mondays(self) -> None:
+        easter = orthodox_easter(2026)
+        self.assertEqual((easter - timedelta(days=48)).weekday(), 0)
+        self.assertEqual((easter + timedelta(days=50)).weekday(), 0)
+
+
+class BankHolidaysBetweenTests(unittest.TestCase):
+    def test_returns_only_holidays_in_the_half_open_range(self) -> None:
+        found = bank_holidays_between(date(2026, 1, 1), date(2026, 1, 6))
+        self.assertEqual(found, [(date(2026, 1, 6), "Epiphany")])
+
+    def test_includes_both_christmas_days_in_december(self) -> None:
+        found = bank_holidays_between(date(2026, 12, 1), date(2026, 12, 31))
+        self.assertEqual(
+            found,
+            [
+                (date(2026, 12, 25), "Christmas Day"),
+                (date(2026, 12, 26), "Second Day of Christmas"),
+            ],
+        )
+
+    def test_empty_when_range_is_reversed_or_empty(self) -> None:
+        self.assertEqual(bank_holidays_between(date(2026, 1, 6), date(2026, 1, 1)), [])
+        self.assertEqual(bank_holidays_between(date(2026, 1, 6), date(2026, 1, 6)), [])
+
+    def test_crosses_year_boundary(self) -> None:
+        found = bank_holidays_between(date(2026, 12, 30), date(2027, 1, 2))
+        self.assertEqual(found, [(date(2027, 1, 1), "New Year's Day")])
+
+
+class MonthsBetweenTests(unittest.TestCase):
+    def test_lists_every_month_inclusive(self) -> None:
+        months = months_between(date(2026, 9, 19), date(2026, 12, 25))
+        self.assertEqual(
+            months,
+            [date(2026, 9, 1), date(2026, 10, 1), date(2026, 11, 1), date(2026, 12, 1)],
+        )
+
+    def test_single_month(self) -> None:
+        self.assertEqual(
+            months_between(date(2026, 12, 1), date(2026, 12, 25)), [date(2026, 12, 1)]
+        )
+
+    def test_wraps_across_years(self) -> None:
+        self.assertEqual(
+            months_between(date(2026, 12, 26), date(2027, 2, 1)),
+            [date(2026, 12, 1), date(2027, 1, 1), date(2027, 2, 1)],
+        )
+
+
 class CountdownSummaryTests(unittest.TestCase):
     def test_summary_mid_season(self) -> None:
         summary = countdown_summary(date(2026, 12, 1))
         self.assertEqual(summary["target"], "2026-12-25")
         self.assertEqual(summary["calendar_days"], 24)
         self.assertEqual(summary["working_days"], 18)
+        self.assertEqual(summary["bank_holiday_days"], 1)
+        self.assertEqual(summary["remaining_working_days"], 17)
         self.assertEqual(summary["weekend_days"], 6)
         self.assertEqual(summary["weeks"], 3)
         self.assertFalse(summary["is_christmas"])
+        self.assertEqual(
+            summary["holidays"],
+            [{"date": "2026-12-25", "name": "Christmas Day", "working_day": True}],
+        )
+
+    def test_summary_deducts_all_bank_holidays_in_the_window(self) -> None:
+        summary = countdown_summary(date(2026, 9, 19))
+        self.assertEqual(summary["working_days"], 70)
+        self.assertEqual(summary["bank_holiday_days"], 2)
+        self.assertEqual(summary["remaining_working_days"], 68)
+        names = [holiday["name"] for holiday in summary["holidays"]]
+        self.assertEqual(names, ["Ochi Day", "Christmas Day"])
 
     def test_summary_on_christmas(self) -> None:
         summary = countdown_summary(date(2026, 12, 25))
         self.assertEqual(summary["calendar_days"], 0)
         self.assertEqual(summary["working_days"], 0)
+        self.assertEqual(summary["remaining_working_days"], 0)
         self.assertTrue(summary["is_christmas"])
 
     def test_summary_after_christmas_targets_next_year(self) -> None:
@@ -89,10 +189,13 @@ class CountdownSummaryTests(unittest.TestCase):
         self.assertEqual(summary["target"], "2027-12-25")
         self.assertEqual(summary["calendar_days"], 364)
         self.assertEqual(summary["working_days"], 260)
+        self.assertEqual(summary["bank_holiday_days"], 8)
+        self.assertEqual(summary["remaining_working_days"], 252)
         self.assertEqual(summary["weekend_days"], 104)
 
     def test_summary_is_json_serialisable(self) -> None:
         json.dumps(countdown_summary(date(2026, 12, 1)))
+
 
 
 class CountdownPageTests(unittest.TestCase):
@@ -101,14 +204,24 @@ class CountdownPageTests(unittest.TestCase):
         self.assertTrue(page.lstrip().startswith("<!DOCTYPE html>"))
         self.assertIn("<title>Christmas Countdown</title>", page)
 
-    def test_page_shows_working_days_and_target(self) -> None:
+    def test_page_shows_remaining_working_days_and_target(self) -> None:
         page = countdown_page(countdown_summary(date(2026, 12, 1)))
-        self.assertIn(">18<", page)
+        self.assertIn('id="working">17</div>', page)
         self.assertIn("working days until Christmas Day", page)
         self.assertIn("Friday, 25 December 2026", page)
 
+    def test_page_deducts_bank_holidays(self) -> None:
+        page = countdown_page(countdown_summary(date(2026, 12, 1)))
+        self.assertIn("18 weekdays minus 1 Greek bank holidays", page)
+        self.assertIn("Greek bank holidays before Christmas", page)
+        self.assertIn("Christmas Day", page)
+
+    def test_page_links_to_full_calendar(self) -> None:
+        page = countdown_page(countdown_summary(date(2026, 12, 1)))
+        self.assertIn('href="/calendar"', page)
+
     def test_page_uses_singular_day_for_one(self) -> None:
-        page = countdown_page(countdown_summary(date(2026, 12, 24)))
+        page = countdown_page(countdown_summary(date(2026, 12, 23)))
         self.assertIn('id="working">1</div>', page)
         self.assertIn("working day until Christmas Day", page)
         self.assertNotIn("working days until Christmas Day", page)
@@ -128,6 +241,35 @@ class CountdownPageTests(unittest.TestCase):
     def test_page_applies_nonce_to_script_when_given(self) -> None:
         page = countdown_page(countdown_summary(date(2026, 12, 1)), nonce="abc123")
         self.assertIn('<script nonce="abc123">', page)
+
+
+class CalendarPageTests(unittest.TestCase):
+    def test_calendar_is_html(self) -> None:
+        page = calendar_page(countdown_summary(date(2026, 9, 19)))
+        self.assertTrue(page.lstrip().startswith("<!DOCTYPE html>"))
+        self.assertIn("<title>Christmas Countdown Calendar</title>", page)
+
+    def test_calendar_spans_every_month_to_christmas(self) -> None:
+        page = calendar_page(countdown_summary(date(2026, 9, 19)))
+        for month in ("September 2026", "October 2026", "November 2026", "December 2026"):
+            self.assertIn(month, page)
+
+    def test_calendar_marks_holidays_and_christmas(self) -> None:
+        page = calendar_page(countdown_summary(date(2026, 9, 19)))
+        self.assertIn("Ochi Day", page)
+        self.assertIn("Christmas Day", page)
+        self.assertIn('class="day holiday counted"', page)
+        self.assertIn('class="day holiday counted christmas"', page)
+
+    def test_calendar_shows_countdown_numbers(self) -> None:
+        page = calendar_page(countdown_summary(date(2026, 9, 19)))
+        self.assertIn("<b>68</b> working days remain", page)
+        self.assertIn("<b>70</b>", page)
+        self.assertIn("bank holidays", page)
+
+    def test_calendar_has_no_script(self) -> None:
+        page = calendar_page(countdown_summary(date(2026, 9, 19)))
+        self.assertNotIn("<script", page)
 
 
 class ServerTests(unittest.TestCase):
@@ -166,7 +308,7 @@ class ServerTests(unittest.TestCase):
         # Date-stable invariants only. The caption copy (plural/singular/Merry
         # Christmas) is covered by the pure countdown_page tests, not here.
         self.assertIn("<title>Christmas Countdown</title>", body)
-        self.assertIn(">18</div>", body)
+        self.assertIn('id="working">17</div>', body)
 
     def test_api_returns_countdown_json(self) -> None:
         status, content_type, body = self._get("/api/countdown")
@@ -174,10 +316,21 @@ class ServerTests(unittest.TestCase):
         self.assertIn("application/json", content_type)
         payload = json.loads(body)
         self.assertIn("working_days", payload)
+        self.assertIn("remaining_working_days", payload)
+        self.assertIn("bank_holiday_days", payload)
         self.assertIn("target", payload)
         # Deterministic because the server clock is pinned to FIXED_TODAY.
         self.assertEqual(payload["target"], "2026-12-25")
         self.assertEqual(payload["working_days"], 18)
+        self.assertEqual(payload["bank_holiday_days"], 1)
+        self.assertEqual(payload["remaining_working_days"], 17)
+
+    def test_calendar_endpoint_serves_html(self) -> None:
+        status, content_type, body = self._get("/calendar")
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", content_type)
+        self.assertIn("<title>Christmas Countdown Calendar</title>", body)
+        self.assertIn("December 2026", body)
 
     def test_health_endpoint(self) -> None:
         status, content_type, body = self._get("/healthz")

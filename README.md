@@ -3,7 +3,9 @@
 `christmas_countdown.py` is a dependency-free web app built on the Python
 standard library's `http.server`. It serves a Christmas countdown widget whose
 headline number is the remaining **working days** (Monday-Friday) until
-Christmas Day, alongside calendar days, weekend days and a live clock.
+Christmas Day **after deducting the Greek public (bank) holidays** that fall in
+the period. It also renders a full month-by-month calendar and exposes the same
+numbers as JSON.
 
 ## Usage
 
@@ -16,29 +18,53 @@ python3 christmas_countdown.py --host 0.0.0.0     # all interfaces
 Then open <http://127.0.0.1:8000/> or:
 
 ```bash
-curl http://127.0.0.1:8000/                  # HTML widget
+curl http://127.0.0.1:8000/                  # HTML countdown widget
+curl http://127.0.0.1:8000/calendar          # full month-by-month calendar
 curl http://127.0.0.1:8000/api/countdown     # JSON numbers
 curl http://127.0.0.1:8000/healthz           # health check
 ```
+
+## Greek bank holidays
+
+The holiday set is computed deterministically from the calendar (no data files
+or network access):
+
+- **Fixed**: 1 Jan (New Year's Day), 6 Jan (Epiphany), 25 Mar (Independence
+  Day), 1 May (Labour Day), 15 Aug (Assumption), 28 Oct (Ochi Day),
+  25 Dec (Christmas Day) and 26 Dec (Second Day of Christmas).
+- **Movable** (relative to Orthodox Easter Sunday, computed with the Meeus
+  Julian algorithm): Clean Monday (Easter - 48 days), Good Friday (Easter - 2),
+  Easter Sunday, Easter Monday (Easter + 1) and Holy Spirit Monday (Easter + 50).
+
+Only holidays that fall on a working day are deducted from the countdown; those
+that land at the weekend are listed but do not change the total. Transfer rules
+for holidays coinciding with weekends (e.g. Labour Day) are not modelled.
 
 ## Defined behaviour
 
 - The target is the next **25 December** on or after today; on Christmas Day the
   countdown is zero and the page shows `Merry Christmas!`. After Christmas the
   target rolls forward to the following year.
-- **Working days** are Monday-Friday strictly after today, up to and including
-  the target. Weekends are excluded; public holidays are **not** excluded, so
-  the count is deterministic and needs no data files or network access.
-- `GET /` returns `200 OK` with the HTML widget.
+- `working_days` counts Monday-Friday strictly after today up to and including
+  the target. `bank_holiday_days` counts the Greek public holidays in that
+  window that fall on a working day, and `remaining_working_days` is
+  `working_days - bank_holiday_days` (never below zero). The headline number is
+  `remaining_working_days`.
+- `GET /` returns `200 OK` with the HTML widget, the holiday list and a link to
+  the calendar.
+- `GET /calendar` returns `200 OK` with an HTML calendar for every month from
+  the current one through the target month, highlighting weekends, bank
+  holidays, today and Christmas Day. It contains no JavaScript.
 - `GET /api/countdown` returns `200 OK` with a JSON object containing `today`,
-  `target`, `calendar_days`, `working_days`, `weekend_days`, `weeks` and
-  `is_christmas`.
+  `target`, `calendar_days`, `working_days`, `bank_holiday_days`,
+  `remaining_working_days`, `weekend_days`, `weeks`, `is_christmas` and
+  `holidays` (a list of `{date, name, working_day}`).
 - `GET /healthz` returns `200 OK` with `{"status": "ok"}`.
 - Any other path returns `404 Not Found`; query strings are ignored when routing.
 - `HEAD` is supported for all routes (headers only, no body). Responses carry
   `X-Content-Type-Options: nosniff`, a restrictive `Content-Security-Policy` and
-  `Referrer-Policy: no-referrer`. The HTML page's inline script is authorised by
-  a per-response `nonce`, so no `script-src 'unsafe-inline'` is needed.
+  `Referrer-Policy: no-referrer`. The HTML countdown page's inline script is
+  authorised by a per-response `nonce`; script-free pages use `script-src 'none'`.
 - The working-days headline is computed from the **server's** local date while
   the live clock targets local midnight on the **client**. If the two timezones
   differ the headline and clock can be off by a day; reload to resync.
