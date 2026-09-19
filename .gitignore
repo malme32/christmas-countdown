@@ -1,0 +1,13 @@
+# Agent scratch/state (never commit)
+.agent-company/
+.agent/tmp/
+.agent/
+
+# Secrets
+*.env
+.env*
+secrets/
+
+# OS / editor noise
+.DS_Store
+*.swp
