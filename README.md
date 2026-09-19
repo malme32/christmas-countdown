@@ -1,3 +1,47 @@
+# Christmas working-days countdown
+
+`christmas_countdown.py` is a dependency-free web app built on the Python
+standard library's `http.server`. It serves a Christmas countdown widget whose
+headline number is the remaining **working days** (Monday-Friday) until
+Christmas Day, alongside calendar days, weekend days and a live clock.
+
+## Usage
+
+```bash
+python3 christmas_countdown.py                    # http://127.0.0.1:8000/
+python3 christmas_countdown.py --port 8080        # custom port
+python3 christmas_countdown.py --host 0.0.0.0     # all interfaces
+```
+
+Then open <http://127.0.0.1:8000/> or:
+
+```bash
+curl http://127.0.0.1:8000/                  # HTML widget
+curl http://127.0.0.1:8000/api/countdown     # JSON numbers
+curl http://127.0.0.1:8000/healthz           # health check
+```
+
+## Defined behaviour
+
+- The target is the next **25 December** on or after today; on Christmas Day the
+  countdown is zero and the page shows `Merry Christmas!`. After Christmas the
+  target rolls forward to the following year.
+- **Working days** are Monday-Friday strictly after today, up to and including
+  the target. Weekends are excluded; public holidays are **not** excluded, so
+  the count is deterministic and needs no data files or network access.
+- `GET /` returns `200 OK` with the HTML widget.
+- `GET /api/countdown` returns `200 OK` with a JSON object containing `today`,
+  `target`, `calendar_days`, `working_days`, `weekend_days`, `weeks` and
+  `is_christmas`.
+- `GET /healthz` returns `200 OK` with `{"status": "ok"}`.
+- Any other path returns `404 Not Found`; query strings are ignored when routing.
+
+## Tests
+
+```bash
+python3 -m unittest -v test_christmas_countdown.py
+```
+
 # Olympiacos next matches
 
 Small, dependency-free helper that reports the next matches for **Olympiacos FC
