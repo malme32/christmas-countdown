@@ -31,6 +31,15 @@ python3 -m unittest -v test_calculator.py
 python3 calculator.py "2 + 3 * 4"
 ```
 
+## Pacman web app
+
+The Pacman game is plain ES-module HTML/CSS/JS + Canvas with no build step.
+
+- Source: `index.html`, `styles.css`, `src/core/`, `src/ui/`, `src/main.js`.
+- Tests: `test/` using Node's built-in `node:test` runner (Node >= 18).
+- Run locally: `python3 -m http.server 8000` then open <http://localhost:8000/>.
+- Run tests: `node --test test/` (or `npm test`).
+
 ## Definition of done
 
 - Changes are committed on the feature branch `agent/create-a-calculator-776a45`.

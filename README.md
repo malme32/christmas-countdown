@@ -1,3 +1,58 @@
+# Pacman web app
+
+A dependency-free Pacman game built with plain HTML, CSS, JavaScript and the
+Canvas API. There is no build step and no third-party dependency; the core game
+logic is separated from the canvas/input layer so it can be unit tested.
+
+## Run
+
+```sh
+python3 -m http.server 8000
+```
+
+Then open <http://localhost:8000/>.
+
+## Controls
+
+- Move: arrow keys or `WASD`
+- Mute: `M` (or the on-screen button)
+- Pause / resume: `P`
+- Start / play again: `Enter` or `Space`
+
+## Tests
+
+```sh
+node --test test/
+# or
+npm test
+```
+
+## Layout
+
+- `index.html` - page shell, HUD and canvas.
+- `styles.css` - presentation only.
+- `src/core/` - pure game logic: `maze.js`, `movement.js`, `player.js`,
+  `ghost.js`, `game.js` (fixed 60 Hz timestep) and `constants.js`.
+- `src/ui/` - `render.js` (canvas), `input.js` (keyboard) and `audio.js`
+  (Web Audio cues synthesised at runtime; pure `cueFor(event)`).
+- `src/main.js` - bootstrap and the `requestAnimationFrame` loop.
+- `test/` - Node unit tests (`node:test`) for the core and pure UI helpers.
+
+## Rules and data model
+
+- 28x31 tile maze with 240 pellets and 4 power pellets.
+- One player and four ghosts (Blinky, Pinky, Inky, Clyde) with scatter/chase
+  targeting and a frightened state after a power pellet.
+- Scoring: pellet 10, power pellet 50, frightened ghosts 200/400/800/1600.
+- A life is lost when the player's tile overlaps a non-eaten ghost; three lives
+  start, and losing them all ends the game.
+- Eating every pellet completes the level (5 levels); clearing the final level
+  wins. The tunnel edges wrap horizontally.
+- Movement, collision and ghost AI run on a fixed 60 Hz timestep, decoupled from
+  rendering.
+
+---
+
 # Olympiacos next matches
 
 Small, dependency-free helper that reports the next matches for **Olympiacos FC
