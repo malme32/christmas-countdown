@@ -35,6 +35,14 @@ curl http://127.0.0.1:8000/healthz           # health check
   `is_christmas`.
 - `GET /healthz` returns `200 OK` with `{"status": "ok"}`.
 - Any other path returns `404 Not Found`; query strings are ignored when routing.
+- `HEAD` is supported for all routes (headers only, no body). Responses carry
+  `X-Content-Type-Options: nosniff`, a restrictive `Content-Security-Policy` and
+  `Referrer-Policy: no-referrer`.
+- The working-days headline is computed from the **server's** local date while
+  the live clock targets local midnight on the **client**. If the two timezones
+  differ the headline and clock can be off by a day; reload to resync.
+- The ready date is computed per request from an injectable clock, so the HTTP
+  handler can be pinned to a fixed date in tests (`create_server(..., today_provider=...)`).
 
 ## Tests
 

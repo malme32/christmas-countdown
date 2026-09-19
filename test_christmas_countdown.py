@@ -20,6 +20,8 @@ from christmas_countdown import (
     working_days_between,
 )
 
+FIXED_TODAY = date(2026, 12, 1)
+
 
 class NextChristmasTests(unittest.TestCase):
     def test_returns_this_year_when_before_christmas(self) -> None:
@@ -122,7 +124,8 @@ class CountdownPageTests(unittest.TestCase):
 class ServerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.server = create_server("127.0.0.1", 0)
+        # Pin the clock so the suite is deterministic whatever the real date is.
+        cls.server = create_server("127.0.0.1", 0, today_provider=lambda: FIXED_TODAY)
         cls.host, cls.port = cls.server.server_address[:2]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -133,19 +136,27 @@ class ServerTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join(timeout=5)
 
-    def _get(self, path: str) -> tuple[int, str, str]:
-        url = f"http://{self.host}:{self.port}{path}"
+    def _request(self, path: str, method: str = "GET") -> tuple[int, object, str]:
+        request = urllib.request.Request(
+            f"http://{self.host}:{self.port}{path}", method=method
+        )
         try:
-            with urllib.request.urlopen(url, timeout=5) as response:
-                return response.status, response.headers.get("Content-Type", ""), response.read().decode("utf-8")
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, response.headers, response.read().decode("utf-8")
         except urllib.error.HTTPError as error:
-            return error.code, error.headers.get("Content-Type", ""), error.read().decode("utf-8")
+            return error.code, error.headers, error.read().decode("utf-8")
+
+    def _get(self, path: str) -> tuple[int, str, str]:
+        status, headers, body = self._request(path)
+        return status, headers.get("Content-Type", ""), body
 
     def test_root_serves_countdown_page(self) -> None:
         status, content_type, body = self._get("/")
         self.assertEqual(status, 200)
         self.assertIn("text/html", content_type)
-        self.assertIn("Christmas Countdown", body)
+        # Date-stable invariants only; the caption copy varies on Christmas Day.
+        self.assertIn("<title>Christmas Countdown</title>", body)
+        self.assertIn(">18</div>", body)
         self.assertIn("working days until Christmas Day", body)
 
     def test_api_returns_countdown_json(self) -> None:
@@ -155,7 +166,9 @@ class ServerTests(unittest.TestCase):
         payload = json.loads(body)
         self.assertIn("working_days", payload)
         self.assertIn("target", payload)
+        # Deterministic because the server clock is pinned to FIXED_TODAY.
         self.assertEqual(payload["target"], "2026-12-25")
+        self.assertEqual(payload["working_days"], 18)
 
     def test_health_endpoint(self) -> None:
         status, content_type, body = self._get("/healthz")
@@ -172,6 +185,46 @@ class ServerTests(unittest.TestCase):
         status, _, body = self._get("/?year=2026")
         self.assertEqual(status, 200)
         self.assertIn("Christmas Countdown", body)
+
+    def test_security_headers_are_sent(self) -> None:
+        status, headers, _ = self._request("/")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertIn("default-src 'none'", headers.get("Content-Security-Policy", ""))
+
+    def test_head_request_returns_headers_without_body(self) -> None:
+        status, headers, body = self._request("/", method="HEAD")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, "")
+        self.assertGreater(int(headers.get("Content-Length", "0")), 0)
+        self.assertIn("text/html", headers.get("Content-Type", ""))
+
+
+class ChristmasDayServerTests(unittest.TestCase):
+    """End-to-end check of the Christmas-Day copy using a pinned clock."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.server = create_server(
+            "127.0.0.1", 0, today_provider=lambda: date(2026, 12, 25)
+        )
+        cls.host, cls.port = cls.server.server_address[:2]
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=5)
+
+    def test_root_shows_merry_christmas(self) -> None:
+        with urllib.request.urlopen(
+            f"http://{self.host}:{self.port}/", timeout=5
+        ) as response:
+            body = response.read().decode("utf-8")
+        self.assertEqual(response.status, 200)
+        self.assertIn("Merry Christmas!", body)
 
 
 if __name__ == "__main__":

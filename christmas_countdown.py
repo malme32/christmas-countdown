@@ -19,15 +19,19 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from datetime import date, timedelta
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import cast
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 CHRISTMAS_MONTH = 12
 CHRISTMAS_DAY = 25
 WORKING_WEEKDAYS = 5
+
+TodayProvider = Callable[[], date]
 
 
 def next_christmas(today: date) -> date:
@@ -203,36 +207,84 @@ class ChristmasCountdownHandler(BaseHTTPRequestHandler):
     server_version = "ChristmasCountdown/1.0"
 
     def do_GET(self) -> None:  # noqa: N802 (http.server API)
+        self._handle(send_body=True)
+
+    def do_HEAD(self) -> None:  # noqa: N802 (http.server API)
+        self._handle(send_body=False)
+
+    def _today(self) -> date:
+        """Return the current date from the server's injectable clock."""
+        return cast(ChristmasCountdownServer, self.server).today_provider()
+
+    def _route(self) -> tuple[int, bytes, str]:
+        """Map the request path to a ``(status, body, content_type)`` tuple."""
         path = self.path.split("?", 1)[0]
         if path == "/":
-            body = countdown_page(countdown_summary()).encode("utf-8")
-            self._respond(200, body, "text/html; charset=utf-8")
-        elif path == "/api/countdown":
-            body = json.dumps(countdown_summary()).encode("utf-8")
-            self._respond(200, body, "application/json; charset=utf-8")
-        elif path == "/healthz":
-            self._respond(200, b'{"status": "ok"}', "application/json; charset=utf-8")
-        else:
-            self._respond(404, b"Not Found\n", "text/plain; charset=utf-8")
+            body = countdown_page(countdown_summary(self._today())).encode("utf-8")
+            return 200, body, "text/html; charset=utf-8"
+        if path == "/api/countdown":
+            body = json.dumps(countdown_summary(self._today())).encode("utf-8")
+            return 200, body, "application/json; charset=utf-8"
+        if path == "/healthz":
+            return 200, b'{"status": "ok"}', "application/json; charset=utf-8"
+        return 404, b"Not Found\n", "text/plain; charset=utf-8"
 
-    def _respond(self, status: int, body: bytes, content_type: str) -> None:
+    def _handle(self, *, send_body: bool) -> None:
+        status, body, content_type = self._route()
+        self._respond(status, body, content_type, send_body=send_body)
+
+    def _respond(
+        self, status: int, body: bytes, content_type: str, *, send_body: bool = True
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+            "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        )
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
-        self.wfile.write(body)
+        if send_body:
+            self.wfile.write(body)
 
     def log_message(self, format: str, *args: object) -> None:
         """Write access logs to stderr, keeping stdout clean."""
         sys.stderr.write("%s - %s\n" % (self.address_string(), format % args))
 
 
-def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> ThreadingHTTPServer:
+class ChristmasCountdownServer(ThreadingHTTPServer):
+    """HTTP server carrying the injectable date provider used by the handler."""
+
+    today_provider: TodayProvider
+
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        RequestHandlerClass: type[BaseHTTPRequestHandler],
+        today_provider: TodayProvider | None = None,
+    ) -> None:
+        super().__init__(server_address, RequestHandlerClass)
+        self.today_provider = today_provider or date.today
+
+
+def create_server(
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    today_provider: TodayProvider | None = None,
+) -> ChristmasCountdownServer:
     """Create (but do not start) an HTTP server bound to ``host:port``.
 
     Passing ``port=0`` binds an ephemeral port, which is convenient for tests.
+    ``today_provider`` is an injectable clock returning the current date; it
+    defaults to :func:`datetime.date.today` and lets tests pin time so the
+    suite stays deterministic year-round.
     """
-    return ThreadingHTTPServer((host, port), ChristmasCountdownHandler)
+    return ChristmasCountdownServer(
+        (host, port), ChristmasCountdownHandler, today_provider=today_provider
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
