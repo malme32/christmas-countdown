@@ -51,6 +51,13 @@ class ErrorTests(unittest.TestCase):
         with self.assertRaises(calc.CalculatorError):
             calc.calculate("")
 
+    def test_whitespace_only_expression_raises(self):
+        with self.assertRaises(calc.CalculatorError):
+            calc.calculate("   \t\n ")
+
+    def test_tokenize_empty_returns_no_tokens(self):
+        self.assertEqual(calc.tokenize(""), [])
+
     def test_division_by_zero_raises(self):
         with self.assertRaises(calc.CalculatorError):
             calc.calculate("1 / 0")
@@ -94,12 +101,39 @@ class CliTests(unittest.TestCase):
             rc = calc.main(["1 / 0"])
         self.assertEqual(rc, 1)
 
+    def test_error_message_on_stderr(self):
+        stderr = io.StringIO()
+        with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", stderr):
+            rc = calc.main(["1 / 0"])
+        self.assertEqual(rc, 1)
+        self.assertIn("division by zero", stderr.getvalue())
+
+    def test_json_error_branch(self):
+        buffer = io.StringIO()
+        with mock.patch("sys.stdout", buffer), mock.patch("sys.stderr", io.StringIO()):
+            rc = calc.main(["1 / 0", "--json"])
+        self.assertEqual(rc, 1)
+        payload = json.loads(buffer.getvalue())
+        self.assertEqual(payload["expression"], "1 / 0")
+        self.assertEqual(payload["error"], "division by zero")
+
     def test_reads_expression_from_stdin(self):
         buffer = io.StringIO()
         with mock.patch("sys.stdin", io.StringIO("10 / 4\n")), mock.patch("sys.stdout", buffer):
             rc = calc.main([])
         self.assertEqual(rc, 0)
         self.assertEqual(buffer.getvalue().strip(), "2.5")
+
+    def test_empty_stdin_reports_error(self):
+        stderr = io.StringIO()
+        with (
+            mock.patch("sys.stdin", io.StringIO("")),
+            mock.patch("sys.stdout", io.StringIO()),
+            mock.patch("sys.stderr", stderr),
+        ):
+            rc = calc.main([])
+        self.assertEqual(rc, 1)
+        self.assertIn("empty expression", stderr.getvalue())
 
 
 if __name__ == "__main__":

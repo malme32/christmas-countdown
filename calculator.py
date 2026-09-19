@@ -149,8 +149,11 @@ def _normalize(value: float | int) -> float | int:
 def calculate(expression: str) -> float | int:
     """Evaluate an arithmetic expression and return the result.
 
-    Raises ``CalculatorError`` for malformed input or division by zero.
+    Raises ``CalculatorError`` for empty input, malformed expressions or
+    division by zero.
     """
+    if expression is None or not expression.strip():
+        raise CalculatorError("empty expression")
     result = _Parser(tokenize(expression)).parse()
     return _normalize(result)
 
