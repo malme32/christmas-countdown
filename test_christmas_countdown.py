@@ -9,6 +9,7 @@ import unittest
 import urllib.error
 import urllib.request
 from datetime import date
+from http.client import HTTPMessage
 
 from christmas_countdown import (
     countdown_page,
@@ -120,6 +121,14 @@ class CountdownPageTests(unittest.TestCase):
         page = countdown_page(countdown_summary(date(2026, 12, 1)))
         self.assertIn('new Date("2026-12-25T00:00:00")', page)
 
+    def test_page_omits_nonce_by_default(self) -> None:
+        page = countdown_page(countdown_summary(date(2026, 12, 1)))
+        self.assertNotIn("nonce=", page)
+
+    def test_page_applies_nonce_to_script_when_given(self) -> None:
+        page = countdown_page(countdown_summary(date(2026, 12, 1)), nonce="abc123")
+        self.assertIn('<script nonce="abc123">', page)
+
 
 class ServerTests(unittest.TestCase):
     @classmethod
@@ -136,7 +145,7 @@ class ServerTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join(timeout=5)
 
-    def _request(self, path: str, method: str = "GET") -> tuple[int, object, str]:
+    def _request(self, path: str, method: str = "GET") -> tuple[int, HTTPMessage, str]:
         request = urllib.request.Request(
             f"http://{self.host}:{self.port}{path}", method=method
         )
@@ -154,10 +163,10 @@ class ServerTests(unittest.TestCase):
         status, content_type, body = self._get("/")
         self.assertEqual(status, 200)
         self.assertIn("text/html", content_type)
-        # Date-stable invariants only; the caption copy varies on Christmas Day.
+        # Date-stable invariants only. The caption copy (plural/singular/Merry
+        # Christmas) is covered by the pure countdown_page tests, not here.
         self.assertIn("<title>Christmas Countdown</title>", body)
         self.assertIn(">18</div>", body)
-        self.assertIn("working days until Christmas Day", body)
 
     def test_api_returns_countdown_json(self) -> None:
         status, content_type, body = self._get("/api/countdown")
@@ -190,7 +199,11 @@ class ServerTests(unittest.TestCase):
         status, headers, _ = self._request("/")
         self.assertEqual(status, 200)
         self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
-        self.assertIn("default-src 'none'", headers.get("Content-Security-Policy", ""))
+        csp = headers.get("Content-Security-Policy", "")
+        self.assertIn("default-src 'none'", csp)
+        # The inline script is authorised by a nonce, not 'unsafe-inline'.
+        self.assertIn("script-src 'nonce-", csp)
+        self.assertNotIn("script-src 'unsafe-inline'", csp)
 
     def test_head_request_returns_headers_without_body(self) -> None:
         status, headers, body = self._request("/", method="HEAD")

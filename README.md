@@ -37,7 +37,8 @@ curl http://127.0.0.1:8000/healthz           # health check
 - Any other path returns `404 Not Found`; query strings are ignored when routing.
 - `HEAD` is supported for all routes (headers only, no body). Responses carry
   `X-Content-Type-Options: nosniff`, a restrictive `Content-Security-Policy` and
-  `Referrer-Policy: no-referrer`.
+  `Referrer-Policy: no-referrer`. The HTML page's inline script is authorised by
+  a per-response `nonce`, so no `script-src 'unsafe-inline'` is needed.
 - The working-days headline is computed from the **server's** local date while
   the live clock targets local midnight on the **client**. If the two timezones
   differ the headline and clock can be off by a day; reload to resync.

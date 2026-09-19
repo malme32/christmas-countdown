@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 import sys
 from collections.abc import Callable
 from datetime import date, timedelta
@@ -108,8 +109,12 @@ def _target_label(target: str) -> str:
     return f"{parsed.strftime('%A')}, {parsed.day} {parsed.strftime('%B %Y')}"
 
 
-def countdown_page(summary: dict[str, object]) -> str:
-    """Return the HTML document for the Christmas countdown widget."""
+def countdown_page(summary: dict[str, object], nonce: str | None = None) -> str:
+    """Return the HTML document for the Christmas countdown widget.
+
+    When ``nonce`` is provided it is added to the inline ``<script>`` tag so the
+    matching ``Content-Security-Policy`` can avoid ``script-src 'unsafe-inline'``.
+    """
     target = str(summary["target"])
     working_days = int(summary["working_days"])
     calendar_days = int(summary["calendar_days"])
@@ -124,6 +129,8 @@ def countdown_page(summary: dict[str, object]) -> str:
         noun = "working day" if working_days == 1 else "working days"
         headline = str(working_days)
         caption = f"{noun} until Christmas Day - {_target_label(target)}"
+
+    script_nonce = f' nonce="{escape(nonce)}"' if nonce else ""
 
     return (
         "<!DOCTYPE html>\n"
@@ -179,7 +186,7 @@ def countdown_page(summary: dict[str, object]) -> str:
         '      <p class="clock" id="clock">Loading clock...</p>\n'
         "    </div>\n"
         "  </main>\n"
-        "  <script>\n"
+        f"  <script{script_nonce}>\n"
         f'    const target = new Date("{escape(target)}T00:00:00");\n'
         "    const clock = document.getElementById(\"clock\");\n"
         "    const pad = (n) => String(n).padStart(2, \"0\");\n"
@@ -201,6 +208,19 @@ def countdown_page(summary: dict[str, object]) -> str:
     )
 
 
+def _content_security_policy(nonce: str | None = None) -> str:
+    """Return the Content-Security-Policy header value.
+
+    The inline ``<script>`` is authorised by a per-response nonce when one is
+    supplied, so the HTML page never needs ``script-src 'unsafe-inline'``.
+    """
+    script_src = f"script-src 'nonce-{nonce}'" if nonce else "script-src 'none'"
+    return (
+        "default-src 'none'; style-src 'unsafe-inline'; " + script_src + "; "
+        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    )
+
+
 class ChristmasCountdownHandler(BaseHTTPRequestHandler):
     """Request handler serving the countdown page and a JSON endpoint."""
 
@@ -216,35 +236,32 @@ class ChristmasCountdownHandler(BaseHTTPRequestHandler):
         """Return the current date from the server's injectable clock."""
         return cast(ChristmasCountdownServer, self.server).today_provider()
 
-    def _route(self) -> tuple[int, bytes, str]:
-        """Map the request path to a ``(status, body, content_type)`` tuple."""
+    def _route(self) -> tuple[int, bytes, str, str]:
+        """Map the request path to ``(status, body, content_type, csp)``."""
         path = self.path.split("?", 1)[0]
         if path == "/":
-            body = countdown_page(countdown_summary(self._today())).encode("utf-8")
-            return 200, body, "text/html; charset=utf-8"
+            nonce = secrets.token_urlsafe(16)
+            body = countdown_page(countdown_summary(self._today()), nonce=nonce).encode("utf-8")
+            return 200, body, "text/html; charset=utf-8", _content_security_policy(nonce)
         if path == "/api/countdown":
             body = json.dumps(countdown_summary(self._today())).encode("utf-8")
-            return 200, body, "application/json; charset=utf-8"
+            return 200, body, "application/json; charset=utf-8", _content_security_policy()
         if path == "/healthz":
-            return 200, b'{"status": "ok"}', "application/json; charset=utf-8"
-        return 404, b"Not Found\n", "text/plain; charset=utf-8"
+            return 200, b'{"status": "ok"}', "application/json; charset=utf-8", _content_security_policy()
+        return 404, b"Not Found\n", "text/plain; charset=utf-8", _content_security_policy()
 
     def _handle(self, *, send_body: bool) -> None:
-        status, body, content_type = self._route()
-        self._respond(status, body, content_type, send_body=send_body)
+        status, body, content_type, csp = self._route()
+        self._respond(status, body, content_type, csp, send_body=send_body)
 
     def _respond(
-        self, status: int, body: bytes, content_type: str, *, send_body: bool = True
+        self, status: int, body: bytes, content_type: str, csp: str, *, send_body: bool = True
     ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header(
-            "Content-Security-Policy",
-            "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
-            "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-        )
+        self.send_header("Content-Security-Policy", csp)
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         if send_body:
