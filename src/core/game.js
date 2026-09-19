@@ -126,7 +126,6 @@ function checkCollisions(game) {
 
     if (game.frightenedTicks > 0) {
       ghost.eaten = true;
-      ghost.speed = EYES_SPEED;
       const points = GHOST_SCORE * 2 ** game.ghostEatChain;
       game.ghostEatChain += 1;
       game.score += points;
@@ -163,6 +162,27 @@ function nextLevel(game) {
   resetPositions(game);
 }
 
+export function desiredGhostSpeed(game, ghost) {
+  if (ghost.eaten) return EYES_SPEED;
+  return game.frightenedTicks > 0 ? FRIGHTENED_SPEED : GHOST_SPEED;
+}
+
+/**
+ * Speed may only change on a tile centre. Every speed is an exact divisor of
+ * UNIT, so an entity starting on a centre keeps landing on centres; switching
+ * speed part-way through a tile would leave it off the grid and advance()
+ * (which only checks walls when centred) would let it phase through walls.
+ */
+export function applyGhostSpeed(game, ghost) {
+  const desired = desiredGhostSpeed(game, ghost);
+  if (isCentered(ghost)) {
+    ghost.speed = desired;
+    ghost.pendingSpeed = null;
+  } else {
+    ghost.pendingSpeed = desired;
+  }
+}
+
 export function update(game) {
   game.tick += 1;
 
@@ -192,11 +212,7 @@ export function update(game) {
 
   const ctx = ghostContext(game);
   for (const ghost of game.ghosts) {
-    ghost.speed = ghost.eaten
-      ? EYES_SPEED
-      : game.frightenedTicks > 0
-        ? FRIGHTENED_SPEED
-        : GHOST_SPEED;
+    applyGhostSpeed(game, ghost);
     updateGhost(ghost, ctx);
   }
 

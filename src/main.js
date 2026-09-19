@@ -6,15 +6,34 @@ import { createInput } from './ui/input.js';
 import { draw } from './ui/render.js';
 
 const TILE_SIZE = 24;
-const READY_START_SCORES = [10000];
+const EXTRA_LIFE_EVERY = 10000;
+const HIGH_SCORE_KEY = 'pacman.highScore';
 
 function byId(id) {
   return document.getElementById(id);
 }
 
+function readHighScore() {
+  try {
+    const value = Number(globalThis.localStorage?.getItem(HIGH_SCORE_KEY));
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeHighScore(value) {
+  try {
+    globalThis.localStorage?.setItem(HIGH_SCORE_KEY, String(value));
+  } catch {
+    // Storage can be unavailable (private mode); the score still shows in-session.
+  }
+}
+
 function bootstrap() {
   const maze = createMaze();
   const game = createGame({ maze });
+  game.highScore = readHighScore();
   const canvas = byId('board');
   canvas.width = maze.cols * TILE_SIZE;
   canvas.height = maze.height * TILE_SIZE;
@@ -30,7 +49,7 @@ function bootstrap() {
   let paused = false;
   let accumulator = 0;
   let lastTime = 0;
-  let awardedExtra = false;
+  let nextExtraLife = EXTRA_LIFE_EVERY;
 
   const applyAction = (action) => {
     audio.resume();
@@ -45,19 +64,29 @@ function bootstrap() {
     }
     if (action === 'start' && (game.status === 'gameOver' || game.status === 'won')) {
       restart(game);
-      awardedExtra = false;
+      nextExtraLife = EXTRA_LIFE_EVERY;
     }
   };
 
   createInput({
-    onDirection: (dir) => setDirection(game, dir),
+    onDirection: (dir) => {
+      audio.resume();
+      setDirection(game, dir);
+    },
     onAction: applyAction,
   });
   byId('mute').addEventListener('click', () => applyAction('mute'));
 
+  const trackHighScore = () => {
+    if (game.score > game.highScore) {
+      game.highScore = game.score;
+      writeHighScore(game.highScore);
+    }
+  };
+
   const updateHud = () => {
     scoreEl.textContent = String(game.score).padStart(6, '0');
-    highEl.textContent = String(Math.max(game.highScore, game.score)).padStart(6, '0');
+    highEl.textContent = String(game.highScore).padStart(6, '0');
     livesEl.textContent = String(Math.max(game.lives, 0));
     levelEl.textContent = String(game.level);
   };
@@ -85,10 +114,12 @@ function bootstrap() {
       if (event === 'chomp' && game.tick % 3 !== 0) continue;
       audio.play(event);
     }
-    if (!awardedExtra && READY_START_SCORES.some((threshold) => game.score >= threshold)) {
-      awardedExtra = true;
+    while (game.score >= nextExtraLife) {
+      game.lives += 1;
+      nextExtraLife += EXTRA_LIFE_EVERY;
       audio.play('extraLife');
     }
+    trackHighScore();
   };
 
   const frame = (time) => {

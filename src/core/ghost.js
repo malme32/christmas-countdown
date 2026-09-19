@@ -29,6 +29,7 @@ export function createGhosts(maze, { level = 1 } = {}) {
     y: maze.ghostStarts[index].y * UNIT,
     dir: index === 1 ? DIR.DOWN : DIR.UP,
     speed: GHOST_SPEED,
+    pendingSpeed: null,
     inHouse: true,
     exiting: false,
     eaten: false,
