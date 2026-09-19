@@ -1,42 +1,47 @@
 # AGENTS.md
 
-Conventions for agents and contributors working in this repository.
+## Repository layout
 
-## Scope
+- `calculator.py` — dependency-free arithmetic calculator (library + CLI).
+- `test_calculator.py` — `unittest` suite for `calculator.py`.
+- `olympiakos_fixtures.py` — Olympiacos fixture reporter (unrelated helper).
+- `test_olympiakos_fixtures.py` — tests for the fixture reporter.
+- `README.md` — usage, defined behaviour and acceptance criteria.
 
-This repository hosts the Pacman web app. Keep changes small, reviewable and
-reversible. Do not commit secrets or generated artifacts.
+## Conventions
 
-## Branches
+- Python 3, standard library only (no third-party dependencies).
+- Prefer small, pure functions with type hints and docstrings.
+- Tests use the built-in `unittest` framework and live next to the module they
+  test as `test_<module>.py`.
+- CLIs use `argparse` and return an `int` exit status from `main()`.
 
-- `main` is the integration branch and must always be releasable.
-- Work happens on short-lived branches named
-  `agent/<task-slug>-<short-id>` or `feature/<slug>`.
-- Never force-push shared branches.
+## Commands
 
-## Commits
+Run everything:
 
-- Write clear, imperative commit messages ("Add ...", "Fix ...").
-- One logical change per commit.
-- Do not commit `.agent/` or `.agent-company/` scratch/state files.
+```bash
+python3 -m unittest -v test_calculator.py test_olympiakos_fixtures.py
+```
 
-## Tests
+Run just the calculator tests and try the CLI:
 
-- Add or update tests alongside behaviour changes.
-- Run the full test suite before opening a pull request and report the result.
+```bash
+python3 -m unittest -v test_calculator.py
+python3 calculator.py "2 + 3 * 4"
+```
 
-## Local development
+## Pacman web app
 
-The app is not implemented yet. When source is added, document the exact run
-and test commands here.
+The Pacman game is plain ES-module HTML/CSS/JS + Canvas with no build step.
 
-## Security
+- Source: `index.html`, `styles.css`, `src/core/`, `src/ui/`, `src/main.js`.
+- Tests: `test/` using Node's built-in `node:test` runner (Node >= 18).
+- Run locally: `python3 -m http.server 8000` then open <http://localhost:8000/>.
+- Run tests: `node --test test/` (or `npm test`).
 
-- Never hard-code tokens, keys or passwords. Read credentials from the
-  environment.
-- Never echo secrets into logs, commits or chat.
+## Definition of done
 
-## Delivery
-
-- Pushing, merging and deploying require explicit operator approval.
-- Prefer pull requests over direct pushes to `main` once the team grows.
+- Changes are committed on the feature branch `agent/create-a-calculator-776a45`.
+- `python3 -m unittest -v test_calculator.py` passes.
+- No third-party dependencies are introduced.

@@ -1,7 +1,10 @@
 # Agent scratch/state (never commit)
-.agent-company/
-.agent/tmp/
 .agent/
+.agent-company/
+
+# Python
+__pycache__/
+*.pyc
 
 # Secrets
 *.env

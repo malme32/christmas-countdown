@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pacman</title>
+    <meta name="description" content="A dependency-free Pacman game built with HTML, CSS, JavaScript and Canvas." />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <h1 class="visually-hidden">Pacman</h1>
+      <section class="hud" aria-label="Game status">
+        <div>SCORE<span id="score">000000</span></div>
+        <div>HIGH<span id="high-score">000000</span></div>
+        <div>LIVES<span id="lives">3</span></div>
+        <div>LEVEL<span id="level">1</span></div>
+      </section>
+      <div class="board-wrap">
+        <canvas id="board" width="672" height="744" aria-label="Pacman maze"></canvas>
+        <p id="overlay" hidden>READY!</p>
+      </div>
+      <section class="controls" aria-label="Controls">
+        <button type="button" id="mute">Sound on (M)</button>
+        <span>Move: Arrow keys / WASD &middot; Pause: P &middot; Restart: Enter</span>
+      </section>
+    </main>
+    <script type="module" src="src/main.js"></script>
+  </body>
+</html>
