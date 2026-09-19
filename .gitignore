@@ -1,5 +1,16 @@
+# Agent scratch/state (never commit)
 .agent/
+.agent-company/
+
+# Python
 __pycache__/
 *.pyc
 
-.agent-company/
+# Secrets
+*.env
+.env*
+secrets/
+
+# OS / editor noise
+.DS_Store
+*.swp
