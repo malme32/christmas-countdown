@@ -7,6 +7,18 @@ import calculator as calc
 
 
 class BasicOperationTests(unittest.TestCase):
+    def test_addition(self):
+        self.assertEqual(calc.calculate("2 + 3"), 5)
+
+    def test_subtraction(self):
+        self.assertEqual(calc.calculate("7 - 3"), 4)
+
+    def test_multiplication(self):
+        self.assertEqual(calc.calculate("6 * 7"), 42)
+
+    def test_division(self):
+        self.assertEqual(calc.calculate("7 / 2"), 3.5)
+
     def test_addition_and_subtraction(self):
         self.assertEqual(calc.calculate("2 + 3 - 1"), 4)
 
@@ -73,6 +85,12 @@ class ErrorTests(unittest.TestCase):
     def test_unexpected_character_raises(self):
         with self.assertRaises(calc.CalculatorError):
             calc.calculate("1 + a")
+
+    def test_non_numeric_input_raises(self):
+        with self.assertRaises(calc.CalculatorError):
+            calc.calculate("hello")
+        with self.assertRaises(calc.CalculatorError):
+            calc.calculate("1 + $")
 
     def test_trailing_operator_raises(self):
         with self.assertRaises(calc.CalculatorError):

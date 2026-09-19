@@ -57,11 +57,38 @@ echo "10 / 4" | python3 calculator.py      # 2.5
 python3 calculator.py                      # interactive prompt
 ```
 
-Malformed input and division by zero raise `CalculatorError` and make the CLI
-exit non-zero.
+## Defined behaviour
+
+- Empty or whitespace-only input raises `CalculatorError("empty expression")`.
+- Division (or modulo) by zero raises `CalculatorError("division by zero")`.
+- Non-numeric or otherwise malformed input raises `CalculatorError` with a
+  message naming the offending character/token.
+- On any `CalculatorError` the CLI prints `error: <message>` to stderr (or a
+  JSON object with an `error` key when `--json` is used) and exits with status
+  `1`. Valid expressions print the result and exit `0`.
+
+## Acceptance criteria
+
+1. Supports `+`, `-`, `*`, `/`, `%`, `^`, parentheses and unary sign with the
+   documented precedence.
+2. Each of the four basic operations produces the correct arithmetic result
+   (see `test_addition`, `test_subtraction`, `test_multiplication`,
+   `test_division`).
+3. Division by zero has defined behaviour: it raises `CalculatorError` and the
+   CLI exits non-zero (see `test_division_by_zero_raises`).
+4. Invalid/non-numeric input raises `CalculatorError` and exits non-zero (see
+   `test_non_numeric_input_raises`, `test_unexpected_character_raises`).
+5. A documented entry point exists: `calculator.py` (CLI) exposing
+   `calculate()`.
 
 ## Tests
 
 ```bash
 python3 -m unittest -v test_calculator.py
+```
+
+## Entry point
+
+```bash
+python3 calculator.py "2 + 3 * 4"
 ```
