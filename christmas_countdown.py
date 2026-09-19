@@ -137,22 +137,30 @@ def greek_holidays(year: int) -> dict[date, str]:
 
     Combines the fixed statutory dates with the movable Orthodox holidays
     anchored on Easter Sunday (Clean Monday, Good Friday, Easter Sunday, Easter
-    Monday and Holy Spirit Monday).
+    Monday and Holy Spirit Monday). Greek law moves Labour Day to the next
+    working day whenever 1 May is a weekend or coincides with another public
+    holiday, so the observed date is returned instead of 1 May in those years.
     """
     easter = orthodox_easter(year)
+    movable = {
+        easter - timedelta(days=48): "Clean Monday",
+        easter - timedelta(days=2): "Good Friday",
+        easter: "Easter Sunday",
+        easter + timedelta(days=1): "Easter Monday",
+        easter + timedelta(days=50): "Holy Spirit Monday",
+    }
     holidays = {
         date(year, month, day): name
         for (month, day), name in GREEK_FIXED_HOLIDAYS.items()
     }
-    holidays.update(
-        {
-            easter - timedelta(days=48): "Clean Monday",
-            easter - timedelta(days=2): "Good Friday",
-            easter: "Easter Sunday",
-            easter + timedelta(days=1): "Easter Monday",
-            easter + timedelta(days=50): "Holy Spirit Monday",
-        }
-    )
+    labour = date(year, 5, 1)
+    if not is_working_day(labour) or labour in movable:
+        holidays.pop(labour, None)
+        observed = labour + timedelta(days=1)
+        while not is_working_day(observed) or observed in movable or observed in holidays:
+            observed += timedelta(days=1)
+        holidays[observed] = "Labour Day (observed)"
+    holidays.update(movable)
     return holidays
 
 
@@ -261,10 +269,13 @@ def countdown_page(summary: dict[str, object], nonce: str | None = None) -> str:
         caption = f"Christmas Day - {_target_label(target)}"
     else:
         noun = "working day" if remaining_days == 1 else "working days"
+        holiday_noun = (
+            "Greek bank holiday" if bank_holiday_days == 1 else "Greek bank holidays"
+        )
         headline = str(remaining_days)
         caption = (
             f"{noun} until Christmas Day - {_target_label(target)} "
-            f"({working_days} weekdays minus {bank_holiday_days} Greek bank holidays)"
+            f"({working_days} weekdays minus {bank_holiday_days} {holiday_noun})"
         )
 
     script_nonce = f' nonce="{escape(nonce)}"' if nonce else ""
@@ -428,7 +439,11 @@ def calendar_page(summary: dict[str, object]) -> str:
     bank_holiday_days = int(summary["bank_holiday_days"])
     weekends = int(summary["weekend_days"])
     holidays = cast(list[dict[str, object]], summary["holidays"])
-    counted = {date.fromisoformat(str(item["date"])) for item in holidays}
+    counted = {
+        date.fromisoformat(str(item["date"]))
+        for item in holidays
+        if item["working_day"]
+    }
 
     year_holidays: dict[date, str] = {}
     for year in range(today.year, target.year + 1):

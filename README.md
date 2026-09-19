@@ -35,10 +35,14 @@ or network access):
 - **Movable** (relative to Orthodox Easter Sunday, computed with the Meeus
   Julian algorithm): Clean Monday (Easter - 48 days), Good Friday (Easter - 2),
   Easter Sunday, Easter Monday (Easter + 1) and Holy Spirit Monday (Easter + 50).
+- **Labour Day transfer**: when 1 May falls on a weekend or coincides with
+  another public holiday, Greek law moves it to the next working day that is
+  not already a holiday (e.g. 2022 → Mon 2 May, 2021 and 2027 → Tue 4 May after
+  Easter Monday). The observed date is returned instead of 1 May.
 
 Only holidays that fall on a working day are deducted from the countdown; those
-that land at the weekend are listed but do not change the total. Transfer rules
-for holidays coinciding with weekends (e.g. Labour Day) are not modelled.
+that land at the weekend are listed (and shown in the calendar) but do not
+change the total.
 
 ## Defined behaviour
 
