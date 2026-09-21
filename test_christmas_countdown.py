@@ -12,16 +12,29 @@ from datetime import date, timedelta
 from http.client import HTTPMessage
 
 from christmas_countdown import (
+    WeatherCache,
+    WEATHER_CODES,
+    _dominant_weather_code,
+    _parse_daily_forecast,
+    _parse_weather_coords,
+    _render_weather_section,
+    aggregate_monthly,
+    aggregate_weekly,
     bank_holidays_between,
     calendar_page,
     countdown_page,
     countdown_summary,
     create_server,
+    datetime_now_utc_iso,
+    fetch_weather,
     greek_holidays,
     is_working_day,
     months_between,
     next_christmas,
     orthodox_easter,
+    translate_weather_code,
+    weather_icon_for_code,
+    weather_summary,
     weekend_days_between,
     working_days_between,
 )
@@ -441,6 +454,817 @@ class ChristmasDayServerTests(unittest.TestCase):
             body = response.read().decode("utf-8")
         self.assertEqual(response.status, 200)
         self.assertIn("Merry Christmas!", body)
+
+
+
+class WeatherCodeTests(unittest.TestCase):
+    """Tests for weather code translation."""
+
+    def test_clear_sky(self) -> None:
+        self.assertEqual(translate_weather_code(0), "Clear sky")
+
+    def test_mainly_clear(self) -> None:
+        self.assertEqual(translate_weather_code(1), "Mainly clear")
+
+    def test_partly_cloudy(self) -> None:
+        self.assertEqual(translate_weather_code(2), "Partly cloudy")
+
+    def test_overcast(self) -> None:
+        self.assertEqual(translate_weather_code(3), "Overcast")
+
+    def test_fog(self) -> None:
+        self.assertEqual(translate_weather_code(45), "Fog")
+
+    def test_rain(self) -> None:
+        self.assertEqual(translate_weather_code(61), "Slight rain")
+        self.assertEqual(translate_weather_code(63), "Moderate rain")
+        self.assertEqual(translate_weather_code(65), "Heavy rain")
+
+    def test_snow(self) -> None:
+        self.assertEqual(translate_weather_code(71), "Slight snow fall")
+        self.assertEqual(translate_weather_code(73), "Moderate snow fall")
+        self.assertEqual(translate_weather_code(75), "Heavy snow fall")
+
+    def test_thunderstorm(self) -> None:
+        self.assertEqual(translate_weather_code(95), "Thunderstorm")
+        self.assertEqual(translate_weather_code(96), "Thunderstorm with slight hail")
+        self.assertEqual(translate_weather_code(99), "Thunderstorm with heavy hail")
+
+    def test_unknown_code(self) -> None:
+        self.assertEqual(translate_weather_code(999), "Unknown")
+
+    def test_all_codes_have_descriptions(self) -> None:
+        for code in WEATHER_CODES:
+            result = translate_weather_code(code)
+            self.assertIsInstance(result, str)
+            self.assertGreater(len(result), 0)
+
+
+class WeatherCacheTests(unittest.TestCase):
+    """Tests for thread-safe weather cache with TTL."""
+
+    def test_cache_stores_and_retrieves(self) -> None:
+        cache = WeatherCache(ttl=60)
+        cache.set(37.98, 23.72, {"temp": 25})
+        result = cache.get(37.98, 23.72)
+        self.assertEqual(result, {"temp": 25})
+
+    def test_cache_returns_none_for_miss(self) -> None:
+        cache = WeatherCache(ttl=60)
+        self.assertIsNone(cache.get(37.98, 23.72))
+
+    def test_cache_expires_after_ttl(self) -> None:
+        cache = WeatherCache(ttl=0)  # TTL=0 means always expired
+        cache.set(37.98, 23.72, {"temp": 25})
+        self.assertIsNone(cache.get(37.98, 23.72))
+
+    def test_cache_separates_by_coordinates(self) -> None:
+        cache = WeatherCache(ttl=60)
+        cache.set(37.98, 23.72, {"temp": 25})
+        cache.set(40.00, 24.00, {"temp": 20})
+        self.assertEqual(cache.get(37.98, 23.72), {"temp": 25})
+        self.assertEqual(cache.get(40.00, 24.00), {"temp": 20})
+
+    def test_cache_clear(self) -> None:
+        cache = WeatherCache(ttl=60)
+        cache.set(37.98, 23.72, {"temp": 25})
+        cache.clear()
+        self.assertIsNone(cache.get(37.98, 23.72))
+
+    def test_cache_thread_safety(self) -> None:
+        cache = WeatherCache(ttl=60)
+        errors = []
+
+        def writer() -> None:
+            for i in range(100):
+                cache.set(37.98, 23.72, {"temp": i})
+
+        def reader() -> None:
+            for _ in range(100):
+                try:
+                    cache.get(37.98, 23.72)
+                except Exception as exc:
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=writer) for _ in range(5)]
+        threads += [threading.Thread(target=reader) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+        self.assertEqual(errors, [])
+
+
+class FetchWeatherTests(unittest.TestCase):
+    """Tests for Open-Meteo API integration."""
+
+    def test_fetch_weather_returns_expected_keys(self) -> None:
+        try:
+            result = fetch_weather()
+            self.assertIn("temperature", result)
+            self.assertIn("windspeed", result)
+            self.assertIn("winddirection", result)
+            self.assertIn("weathercode", result)
+            self.assertIn("description", result)
+            self.assertIn("latitude", result)
+            self.assertIn("longitude", result)
+        except (urllib.error.URLError, OSError):
+            self.skipTest("Open-Meteo API unreachable")
+
+    def test_fetch_weather_default_location(self) -> None:
+        try:
+            result = fetch_weather()
+            self.assertEqual(result["latitude"], 37.9838)
+            self.assertEqual(result["longitude"], 23.7275)
+        except (urllib.error.URLError, OSError):
+            self.skipTest("Open-Meteo API unreachable")
+
+    def test_fetch_weather_custom_location(self) -> None:
+        try:
+            result = fetch_weather(lat=51.5074, lon=-0.1278)
+            self.assertEqual(result["latitude"], 51.5074)
+            self.assertEqual(result["longitude"], -0.1278)
+        except (urllib.error.URLError, OSError):
+            self.skipTest("Open-Meteo API unreachable")
+
+    def test_fetch_weather_description_matches_code(self) -> None:
+        try:
+            result = fetch_weather()
+            code = result["weathercode"]
+            description = result["description"]
+            expected = WEATHER_CODES.get(code, "Unknown")
+            self.assertEqual(description, expected)
+        except (urllib.error.URLError, OSError):
+            self.skipTest("Open-Meteo API unreachable")
+
+    def test_fetch_weather_caches_result(self) -> None:
+        from christmas_countdown import _weather_cache
+
+        _weather_cache.clear()
+        try:
+            result1 = fetch_weather()
+            result2 = fetch_weather()
+            self.assertEqual(result1, result2)
+        except (urllib.error.URLError, OSError):
+            self.skipTest("Open-Meteo API unreachable")
+        finally:
+            _weather_cache.clear()
+
+    def test_fetch_weather_invalid_api_url(self) -> None:
+        import christmas_countdown
+        from unittest.mock import patch
+
+        def mock_urlopen(*args, **kwargs):
+            raise urllib.error.URLError("Connection refused")
+
+        original_url = christmas_countdown.WEATHER_API_URL
+        try:
+            christmas_countdown._weather_cache.clear()
+            christmas_countdown.WEATHER_API_URL = "https://invalid.example.com/weather"
+            with patch(
+                "christmas_countdown.urllib.request.urlopen", side_effect=mock_urlopen
+            ):
+                with self.assertRaises(urllib.error.URLError):
+                    fetch_weather(timeout=1.0)
+        finally:
+            christmas_countdown.WEATHER_API_URL = original_url
+            christmas_countdown._weather_cache.clear()
+
+    def test_fetch_weather_success_mocked(self) -> None:
+        import christmas_countdown
+        from unittest.mock import patch
+
+        class FakeResponse:
+            def __init__(self, payload: object) -> None:
+                self._body = json.dumps(payload).encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self) -> FakeResponse:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        payload = {
+            "current_weather": {
+                "temperature": 18.0,
+                "windspeed": 8.5,
+                "winddirection": 270,
+                "weathercode": 61,
+            },
+            "daily": {
+                "time": ["2026-09-21", "2026-09-22", "2026-09-23"],
+                "weathercode": [61, 1, 1],
+                "temperature_2m_max": [20.0, 22.0, 23.0],
+                "temperature_2m_min": [12.0, 13.0, 14.0],
+                "precipitation_sum": [2.5, 0.0, 0.0],
+                "precipitation_probability_max": [80, 10, 5],
+                "windspeed_10m_max": [15.0, 10.0, 8.0],
+            },
+        }
+        expected_daily = [
+            {
+                "date": "2026-09-21",
+                "weathercode": 61,
+                "description": "Slight rain",
+                "temp_max": 20.0,
+                "temp_min": 12.0,
+                "precipitation_sum": 2.5,
+                "precipitation_probability": 80,
+                "windspeed_max": 15.0,
+            },
+            {
+                "date": "2026-09-22",
+                "weathercode": 1,
+                "description": "Mainly clear",
+                "temp_max": 22.0,
+                "temp_min": 13.0,
+                "precipitation_sum": 0.0,
+                "precipitation_probability": 10,
+                "windspeed_max": 10.0,
+            },
+            {
+                "date": "2026-09-23",
+                "weathercode": 1,
+                "description": "Mainly clear",
+                "temp_max": 23.0,
+                "temp_min": 14.0,
+                "precipitation_sum": 0.0,
+                "precipitation_probability": 5,
+                "windspeed_max": 8.0,
+            },
+        ]
+        try:
+            christmas_countdown._weather_cache.clear()
+            with patch(
+                "christmas_countdown.urllib.request.urlopen",
+                return_value=FakeResponse(payload),
+            ) as mock_urlopen:
+                result = fetch_weather(lat=1.0, lon=2.0)
+                cached = fetch_weather(lat=1.0, lon=2.0)
+            cached_at = result.pop("cached_at")
+            self.assertIsInstance(cached_at, str)
+            self.assertEqual(
+                result,
+                {
+                    "temperature": 18.0,
+                    "windspeed": 8.5,
+                    "winddirection": 270,
+                    "weathercode": 61,
+                    "description": "Slight rain",
+                    "latitude": 1.0,
+                    "longitude": 2.0,
+                    "current": {
+                        "temperature": 18.0,
+                        "windspeed": 8.5,
+                        "winddirection": 270,
+                        "weathercode": 61,
+                        "description": "Slight rain",
+                    },
+                    "daily": expected_daily,
+                    "weekly": [
+                        {
+                            "week_start": "2026-09-21",
+                            "days": 3,
+                            "temp_avg": 17.3,
+                            "precipitation_total": 2.5,
+                            "weather_dominant": 1,
+                            "description": "Mainly clear",
+                        }
+                    ],
+                    "monthly": [
+                        {
+                            "month": "2026-09",
+                            "days": 3,
+                            "temp_avg": 17.3,
+                            "precipitation_total": 2.5,
+                            "weather_dominant": 1,
+                            "description": "Mainly clear",
+                        }
+                    ],
+                    "source": "open-meteo",
+                },
+            )
+            # Second call is served from the cache: urlopen runs only once.
+            self.assertEqual(cached, result)
+            self.assertEqual(mock_urlopen.call_count, 1)
+        finally:
+            christmas_countdown._weather_cache.clear()
+
+    def test_fetch_weather_rejects_malformed_payloads(self) -> None:
+        import christmas_countdown
+        from unittest.mock import patch
+
+        class FakeResponse:
+            def __init__(self, payload: object) -> None:
+                self._body = json.dumps(payload).encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self) -> FakeResponse:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        for bad_payload in ({}, {"current_weather": None}, [1, 2, 3]):
+            try:
+                christmas_countdown._weather_cache.clear()
+                with patch(
+                    "christmas_countdown.urllib.request.urlopen",
+                    return_value=FakeResponse(bad_payload),
+                ):
+                    with self.assertRaises(ValueError):
+                        fetch_weather(lat=1.0, lon=2.0)
+            finally:
+                christmas_countdown._weather_cache.clear()
+
+
+class WeatherSummaryTests(unittest.TestCase):
+    """Tests for weather summary with error handling."""
+
+    def test_weather_summary_success(self) -> None:
+        try:
+            result = weather_summary()
+            self.assertIn("temperature", result)
+            self.assertNotIn("error", result)
+        except (urllib.error.URLError, OSError):
+            self.skipTest("Open-Meteo API unreachable")
+
+    def test_weather_summary_error_handling(self) -> None:
+        import christmas_countdown
+        from unittest.mock import patch
+
+        def mock_urlopen(*args, **kwargs):
+            raise urllib.error.URLError("Connection refused")
+
+        original_url = christmas_countdown.WEATHER_API_URL
+        try:
+            christmas_countdown._weather_cache.clear()
+            christmas_countdown.WEATHER_API_URL = "https://invalid.example.com/weather"
+            with patch(
+                "christmas_countdown.urllib.request.urlopen", side_effect=mock_urlopen
+            ):
+                result = weather_summary(timeout=1.0)
+            self.assertIn("error", result)
+            self.assertIn("latitude", result)
+            self.assertIn("longitude", result)
+        finally:
+            christmas_countdown.WEATHER_API_URL = original_url
+            christmas_countdown._weather_cache.clear()
+
+    def test_weather_summary_malformed_payloads_return_error(self) -> None:
+        import christmas_countdown
+        from unittest.mock import patch
+
+        class FakeResponse:
+            def __init__(self, payload: object) -> None:
+                self._body = json.dumps(payload).encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self) -> FakeResponse:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        for bad_payload in ({}, {"current_weather": None}, [1, 2, 3]):
+            try:
+                christmas_countdown._weather_cache.clear()
+                with patch(
+                    "christmas_countdown.urllib.request.urlopen",
+                    return_value=FakeResponse(bad_payload),
+                ):
+                    result = weather_summary(lat=1.0, lon=2.0)
+                self.assertIn("error", result)
+                self.assertEqual(result["latitude"], 1.0)
+                self.assertEqual(result["longitude"], 2.0)
+            finally:
+                christmas_countdown._weather_cache.clear()
+
+    def test_weather_summary_json_serialisable(self) -> None:
+        try:
+            result = weather_summary()
+            json.dumps(result)
+        except (urllib.error.URLError, OSError):
+            self.skipTest("Open-Meteo API unreachable")
+
+
+def _fake_weather_payload() -> dict:
+    daily = [
+        {
+            "date": f"2026-12-{day:02d}",
+            "weathercode": 1,
+            "description": "Mainly clear",
+            "temp_max": 20.0,
+            "temp_min": 12.0,
+            "precipitation_sum": 0.0,
+            "precipitation_probability": 10,
+            "windspeed_max": 10.0,
+        }
+        for day in range(1, 9)
+    ]
+    return {
+        "temperature": 18.0,
+        "windspeed": 8.5,
+        "winddirection": 270,
+        "weathercode": 1,
+        "description": "Mainly clear",
+        "latitude": 37.9838,
+        "longitude": 23.7275,
+        "current": {
+            "temperature": 18.0,
+            "windspeed": 8.5,
+            "winddirection": 270,
+            "weathercode": 1,
+            "description": "Mainly clear",
+        },
+        "daily": daily,
+        "weekly": [
+            {
+                "week_start": "2026-12-01",
+                "days": 7,
+                "temp_avg": 16.0,
+                "precipitation_total": 0.0,
+                "weather_dominant": 1,
+                "description": "Mainly clear",
+            },
+            {
+                "week_start": "2026-12-08",
+                "days": 1,
+                "temp_avg": 16.0,
+                "precipitation_total": 0.0,
+                "weather_dominant": 1,
+                "description": "Mainly clear",
+            },
+        ],
+        "monthly": [
+            {
+                "month": "2026-12",
+                "days": 8,
+                "temp_avg": 16.0,
+                "precipitation_total": 0.0,
+                "weather_dominant": 1,
+                "description": "Mainly clear",
+            }
+        ],
+        "source": "open-meteo",
+        "cached_at": "2026-01-01T00:00:00+00:00",
+    }
+
+
+class ParseWeatherCoordsTests(unittest.TestCase):
+    def test_defaults_when_no_query(self) -> None:
+        self.assertEqual(_parse_weather_coords(""), (37.9838, 23.7275))
+
+    def test_valid_overrides(self) -> None:
+        self.assertEqual(_parse_weather_coords("lat=51.5&lon=-0.12"), (51.5, -0.12))
+
+    def test_rejects_non_numeric(self) -> None:
+        self.assertIsNone(_parse_weather_coords("lat=abc&lon=10"))
+
+    def test_rejects_out_of_range(self) -> None:
+        self.assertIsNone(_parse_weather_coords("lat=91&lon=0"))
+        self.assertIsNone(_parse_weather_coords("lat=0&lon=181"))
+        self.assertIsNone(_parse_weather_coords("lat=-91&lon=0"))
+
+    def test_fetch_weather_rejects_out_of_range_directly(self) -> None:
+        with self.assertRaises(ValueError):
+            fetch_weather(lat=91.0, lon=0.0)
+        with self.assertRaises(ValueError):
+            fetch_weather(lat=0.0, lon=200.0)
+
+
+class RenderWeatherSectionTests(unittest.TestCase):
+    def test_full_section_has_all_blocks(self) -> None:
+        html = _render_weather_section(_fake_weather_payload())
+        self.assertIn('class="weather"', html)
+        self.assertIn('class="weather-current"', html)
+        self.assertIn("18.0°C", html)
+        self.assertIn("7-day forecast", html)
+        self.assertEqual(html.count('class="forecast-card"'), 7)
+        self.assertIn("Weekly summary", html)
+        self.assertIn("Monthly summary", html)
+        self.assertIn("CC BY 4.0", html)
+        self.assertIn("open-meteo", html)
+
+    def test_no_client_side_fetch(self) -> None:
+        html = _render_weather_section(_fake_weather_payload())
+        self.assertNotIn("fetch(", html)
+        self.assertNotIn("XMLHttpRequest", html)
+        self.assertNotIn("api.open-meteo.com", html)
+
+    def test_error_and_none_fallback(self) -> None:
+        for bad in (None, {"error": "boom", "latitude": 1.0, "longitude": 2.0}):
+            html = _render_weather_section(bad)  # type: ignore[arg-type]
+            self.assertIn("Weather currently unavailable", html)
+            self.assertNotIn("fetch(", html)
+        # An empty dict is not an error payload: it renders the section
+        # skeleton with per-block fallbacks rather than crashing.
+        html = _render_weather_section({})
+        self.assertIn("Athens weather", html)
+        self.assertIn("Forecast currently unavailable", html)
+
+    def test_escaping(self) -> None:
+        payload = _fake_weather_payload()
+        payload["current"]["description"] = '<script>alert("x")</script>'  # type: ignore[index]
+        html = _render_weather_section(payload)
+        self.assertNotIn('<script>alert("x")</script>', html)
+        self.assertIn("&lt;script&gt;", html)
+
+    def test_page_embeds_weather_below_facts(self) -> None:
+        page = countdown_page(countdown_summary(date(2026, 12, 1)), weather=_fake_weather_payload())
+        self.assertGreater(page.find('class="weather"'), page.find('class="facts"'))
+        self.assertIn("CC BY 4.0", page)
+        self.assertNotIn("fetch(", page)
+
+    def test_weather_icon_helper(self) -> None:
+        self.assertEqual(weather_icon_for_code(0), "\u2600\ufe0f")
+        self.assertEqual(weather_icon_for_code(999), "\u2753")
+        self.assertEqual(weather_icon_for_code(None), "\u2753")
+
+
+class WeatherApiRouteTests(unittest.TestCase):
+    """Route-level tests for /api/weather with a mocked upstream."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import christmas_countdown
+
+        cls._mod = christmas_countdown
+        cls._mod._weather_cache.clear()
+
+        class FakeResponse:
+            def __init__(self, payload: object) -> None:
+                self._body = json.dumps(payload).encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self) -> FakeResponse:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        cls._payload = {
+            "current_weather": {
+                "temperature": 18.0,
+                "windspeed": 8.5,
+                "winddirection": 270,
+                "weathercode": 1,
+            },
+            "daily": {
+                "time": ["2026-12-01", "2026-12-02"],
+                "weathercode": [1, 1],
+                "temperature_2m_max": [20.0, 21.0],
+                "temperature_2m_min": [12.0, 13.0],
+                "precipitation_sum": [0.0, 0.0],
+                "precipitation_probability_max": [10, 5],
+                "windspeed_10m_max": [10.0, 9.0],
+            },
+        }
+
+        from unittest.mock import patch
+
+        real_urlopen = urllib.request.urlopen
+        cls._upstream_calls: list[str] = []
+
+        def _fake_urlopen(request, timeout=5, *args, **kwargs):
+            url = request.full_url if isinstance(request, urllib.request.Request) else str(request)
+            if "open-meteo" in url or "invalid.example.com" in url:
+                cls._upstream_calls.append(url)
+                return FakeResponse(cls._payload)
+            return real_urlopen(request, timeout=timeout, *args, **kwargs)
+
+        cls._patcher = patch(
+            "christmas_countdown.urllib.request.urlopen",
+            side_effect=_fake_urlopen,
+        )
+        cls._mock = cls._patcher.start()
+        cls.server = create_server("127.0.0.1", 0, today_provider=lambda: FIXED_TODAY)
+        cls.host, cls.port = cls.server.server_address[:2]
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=5)
+        cls._patcher.stop()
+        cls._mod._weather_cache.clear()
+
+    def _request(self, path: str, method: str = "GET") -> tuple[int, HTTPMessage, str]:
+        request = urllib.request.Request(
+            f"http://{self.host}:{self.port}{path}", method=method
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, response.headers, response.read().decode("utf-8")
+        except urllib.error.HTTPError as error:
+            return error.code, error.headers, error.read().decode("utf-8")
+
+    def test_weather_endpoint_returns_full_shape(self) -> None:
+        status, headers, body = self._request("/api/weather")
+        self.assertEqual(status, 200)
+        self.assertIn("application/json", headers.get("Content-Type", ""))
+        payload = json.loads(body)
+        for key in ("current", "daily", "weekly", "monthly", "source", "cached_at"):
+            self.assertIn(key, payload)
+
+    def test_weather_endpoint_rejects_bad_coords(self) -> None:
+        status, _, body = self._request("/api/weather?lat=999&lon=0")
+        self.assertEqual(status, 400)
+        self.assertIn("Invalid coordinates", json.loads(body)["error"])
+
+    def test_weather_endpoint_head_and_security_headers(self) -> None:
+        status, headers, body = self._request("/api/weather", method="HEAD")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, "")
+        self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
+        csp = headers.get("Content-Security-Policy", "")
+        self.assertIn("default-src 'none'", csp)
+        self.assertIn("script-src 'none'", csp)
+
+    def test_weather_endpoint_cache_hit(self) -> None:
+        self._mod._weather_cache.clear()
+        self._upstream_calls.clear()
+        self._request("/api/weather?lat=10&lon=20")
+        self._request("/api/weather?lat=10&lon=20")
+        self.assertEqual(len(self._upstream_calls), 1)
+
+    def test_root_embeds_server_side_weather(self) -> None:
+        status, _, body = self._request("/")
+        self.assertEqual(status, 200)
+        self.assertIn('class="weather"', body)
+        self.assertIn("CC BY 4.0", body)
+        self.assertNotIn("fetch(", body)
+
+
+def _make_daily(
+    dates: list[str],
+    code: int = 1,
+    temp_max: float = 20.0,
+    temp_min: float = 10.0,
+    precip: float = 1.0,
+) -> list[dict]:
+    return [
+        {
+            "date": day,
+            "weathercode": code,
+            "description": "Mainly clear",
+            "temp_max": temp_max,
+            "temp_min": temp_min,
+            "precipitation_sum": precip,
+            "precipitation_probability": 10,
+            "windspeed_max": 9.0,
+        }
+        for day in dates
+    ]
+
+
+class ParseDailyForecastTests(unittest.TestCase):
+    def test_normalises_columns(self) -> None:
+        payload_daily = {
+            "time": ["2026-12-01", "2026-12-02"],
+            "weathercode": [61, 1],
+            "temperature_2m_max": [20.0, 22.0],
+            "temperature_2m_min": [12.0, 13.0],
+            "precipitation_sum": [2.5, 0.0],
+            "precipitation_probability_max": [80, 10],
+            "windspeed_10m_max": [15.0, 10.0],
+        }
+        daily = _parse_daily_forecast(payload_daily)
+        self.assertEqual(len(daily), 2)
+        self.assertEqual(daily[0]["description"], "Slight rain")
+        self.assertEqual(daily[0]["precipitation_sum"], 2.5)
+        self.assertEqual(daily[1]["windspeed_max"], 10.0)
+
+    def test_missing_or_malformed_block_returns_empty(self) -> None:
+        for bad in (None, {}, [], "nope", {"time": []}, {"time": "2026-12-01"}):
+            self.assertEqual(_parse_daily_forecast(bad), [])  # type: ignore[arg-type]
+
+    def test_ragged_columns_default_to_none(self) -> None:
+        daily = _parse_daily_forecast({"time": ["2026-12-01"]})
+        self.assertEqual(len(daily), 1)
+        self.assertIsNone(daily[0]["weathercode"])
+        self.assertEqual(daily[0]["description"], "Unknown")
+        self.assertIsNone(daily[0]["temp_max"])
+        self.assertIsNone(daily[0]["windspeed_max"])
+
+    def test_non_string_dates_skipped(self) -> None:
+        daily = _parse_daily_forecast(
+            {"time": ["2026-12-01", 123, None], "weathercode": [1, 1, 1]}
+        )
+        self.assertEqual([entry["date"] for entry in daily], ["2026-12-01"])
+
+    def test_non_integer_code_is_unknown(self) -> None:
+        daily = _parse_daily_forecast({"time": ["2026-12-01"], "weathercode": ["1"]})
+        self.assertIsNone(daily[0]["weathercode"])
+        self.assertEqual(daily[0]["description"], "Unknown")
+
+
+class DominantWeatherCodeTests(unittest.TestCase):
+    def test_mode_wins(self) -> None:
+        self.assertEqual(_dominant_weather_code([1, 61, 1, 3, 1]), 1)
+
+    def test_tie_goes_to_first_seen(self) -> None:
+        self.assertEqual(_dominant_weather_code([61, 1]), 61)
+        self.assertEqual(_dominant_weather_code([1, 61]), 1)
+
+    def test_empty_returns_none(self) -> None:
+        self.assertIsNone(_dominant_weather_code([]))
+
+
+class AggregateWeeklyTests(unittest.TestCase):
+    def test_chunks_into_seven_day_weeks(self) -> None:
+        dates = [f"2026-12-{day:02d}" for day in range(1, 9)]
+        weeks = aggregate_weekly(_make_daily(dates))
+        self.assertEqual(len(weeks), 2)
+        self.assertEqual(weeks[0]["week_start"], "2026-12-01")
+        self.assertEqual(weeks[0]["days"], 7)
+        self.assertEqual(weeks[1]["week_start"], "2026-12-08")
+        self.assertEqual(weeks[1]["days"], 1)
+
+    def test_averages_and_totals(self) -> None:
+        dates = [f"2026-12-{day:02d}" for day in range(1, 8)]
+        weeks = aggregate_weekly(_make_daily(dates))
+        self.assertEqual(weeks[0]["temp_avg"], 15.0)
+        self.assertEqual(weeks[0]["precipitation_total"], 7.0)
+        self.assertEqual(weeks[0]["weather_dominant"], 1)
+        self.assertEqual(weeks[0]["description"], "Mainly clear")
+
+    def test_missing_values_excluded(self) -> None:
+        daily = _make_daily(["2026-12-01", "2026-12-02"])
+        daily[1]["temp_max"] = None
+        daily[1]["precipitation_sum"] = None
+        weeks = aggregate_weekly(daily)
+        self.assertEqual(weeks[0]["temp_avg"], 15.0)
+        self.assertEqual(weeks[0]["precipitation_total"], 1.0)
+
+    def test_empty_returns_empty(self) -> None:
+        self.assertEqual(aggregate_weekly([]), [])
+
+
+class AggregateMonthlyTests(unittest.TestCase):
+    def test_groups_by_calendar_month_sorted(self) -> None:
+        daily = _make_daily(["2027-01-01", "2026-12-30", "2026-12-31"])
+        months = aggregate_monthly(daily)
+        self.assertEqual([m["month"] for m in months], ["2026-12", "2027-01"])
+        self.assertEqual(months[0]["days"], 2)
+        self.assertEqual(months[1]["days"], 1)
+        self.assertEqual(months[0]["temp_avg"], 15.0)
+        self.assertEqual(months[0]["precipitation_total"], 2.0)
+
+    def test_malformed_dates_bucketed_as_unknown(self) -> None:
+        daily = _make_daily(["2026-12-01"])
+        daily.append(
+            {
+                "date": None,
+                "weathercode": 1,
+                "description": "Mainly clear",
+                "temp_max": 20.0,
+                "temp_min": 10.0,
+                "precipitation_sum": 0.0,
+                "precipitation_probability": 0,
+                "windspeed_max": 5.0,
+            }
+        )
+        months = aggregate_monthly(daily)
+        self.assertEqual([m["month"] for m in months], ["2026-12", "unknown"])
+
+    def test_empty_returns_empty(self) -> None:
+        self.assertEqual(aggregate_monthly([]), [])
+
+
+class WeatherCacheEvictionTests(unittest.TestCase):
+    def test_oldest_entry_evicted_when_bound_exceeded(self) -> None:
+        cache = WeatherCache(ttl=60, max_entries=1)
+        cache.set(1.0, 1.0, {"temp": 1})
+        cache.set(2.0, 2.0, {"temp": 2})
+        self.assertIsNone(cache.get(1.0, 1.0))
+        self.assertEqual(cache.get(2.0, 2.0), {"temp": 2})
+
+    def test_default_cache_stores_many_entries(self) -> None:
+        cache = WeatherCache(ttl=60)
+        for i in range(10):
+            cache.set(float(i), float(i), {"temp": i})
+        for i in range(10):
+            self.assertEqual(cache.get(float(i), float(i)), {"temp": i})
+
+
+class DatetimeNowUtcIsoTests(unittest.TestCase):
+    def test_returns_timezone_aware_iso_string(self) -> None:
+        from datetime import datetime
+
+        parsed = datetime.fromisoformat(datetime_now_utc_iso())
+        self.assertIsNotNone(parsed.tzinfo)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Static Christmas working-days countdown widget. No backend, no build step.">
+  <title>Christmas Countdown</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center;
+      justify-content: center; font-family: system-ui, -apple-system,
+      "Segoe UI", Roboto, sans-serif; color: #f5fbf7;
+      background: radial-gradient(circle at 50% 0%, #0b3d2e, #071c15 70%);
+    }
+    main { text-align: center; padding: 2rem; }
+    .card {
+      background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1);
+      border-radius: 1.25rem; padding: 2.5rem 3rem; box-shadow: 0 20px 60px rgba(0,0,0,.35);
+      max-width: 34rem;
+    }
+    h1 {
+      margin: 0; font-size: 1.4rem; font-weight: 600; letter-spacing: .12em;
+      text-transform: uppercase; color: #b7f0d0;
+    }
+    .working {
+      font-size: clamp(4rem, 18vw, 11rem); font-weight: 800; line-height: 1;
+      color: #e8443a; text-shadow: 0 0 40px rgba(232,68,58,.45); margin: 1rem 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .caption { margin: 0; font-size: 1.05rem; color: #cfe9d8; }
+    .facts { display: flex; gap: 1.25rem; justify-content: center; margin-top: 2rem; flex-wrap: wrap; }
+    .fact {
+      background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1);
+      border-radius: .75rem; padding: .85rem 1.1rem; min-width: 7rem;
+    }
+    .fact b { display: block; font-size: 1.4rem; color: #fff; font-variant-numeric: tabular-nums; }
+    .fact span { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: #9fc9b0; }
+    .clock { margin-top: 2rem; font-variant-numeric: tabular-nums; font-size: 1.1rem; color: #b7f0d0; min-height: 1.6em; }
+    .note { margin: 1.5rem 0 0; font-size: .8rem; color: #9fc9b0; }
+    @media (max-width: 700px) {
+      main { padding: 1rem; }
+      .card { padding: 1.5rem 1.25rem; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card">
+      <h1>Christmas Countdown</h1>
+      <div class="working" id="working">…</div>
+      <p class="caption" id="caption">Loading…</p>
+      <div class="facts">
+        <div class="fact"><b id="calendar">–</b><span>calendar days</span></div>
+        <div class="fact"><b id="weekend">–</b><span>weekend days</span></div>
+        <div class="fact"><b id="bank">–</b><span>bank holidays</span></div>
+        <div class="fact"><b id="weeks">–</b><span>full weeks</span></div>
+      </div>
+      <p class="clock" id="clock">Loading clock…</p>
+      <p class="note">Static page for GitHub Pages: working days are Monday–Friday
+      minus Greek public holidays. No backend, no network calls; the full
+      calendar and weather need the Python server.</p>
+    </div>
+  </main>
+  <script>
+    // Mirror of christmas_countdown.py: next Christmas on/after today;
+    // working days are Mon-Fri strictly after today up to and including target,
+    // minus Greek public (bank) holidays that fall on working days.
+    function startOfDay(d) {
+      return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    }
+    function addDays(d, n) {
+      return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+    }
+    function nextChristmas(today) {
+      var y = today.getFullYear();
+      var target = new Date(y, 11, 25);
+      if (today > target) {
+        target = new Date(y + 1, 11, 25);
+      }
+      return target;
+    }
+    function isWorkingDay(day) {
+      var dow = day.getDay(); // 0=Sun..6=Sat
+      return dow >= 1 && dow <= 5;
+    }
+    var FIXED_HOLIDAYS = {
+      "1-1": "New Year's Day",
+      "1-6": "Epiphany",
+      "3-25": "Independence Day",
+      "5-1": "Labour Day",
+      "8-15": "Assumption of Mary",
+      "10-28": "Ochi Day",
+      "12-25": "Christmas Day",
+      "12-26": "Second Day of Christmas"
+    };
+    function dateKey(d) {
+      return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate();
+    }
+    function orthodoxEaster(year) {
+      // Meeus Julian algorithm, then Julian-to-Gregorian offset.
+      var a = year % 4, b = year % 7, c = year % 19;
+      var d = (19 * c + 15) % 30;
+      var e = (2 * a + 4 * b - d + 34) % 7;
+      var julian = new Date(year, Math.floor((d + e + 114) / 31) - 1, ((d + e + 114) % 31) + 1);
+      var offset = Math.floor(year / 100) - Math.floor(year / 400) - 2;
+      return addDays(julian, offset);
+    }
+    function greekHolidays(year) {
+      var easter = orthodoxEaster(year);
+      var movable = {};
+      movable[dateKey(addDays(easter, -48))] = "Clean Monday";
+      movable[dateKey(addDays(easter, -2))] = "Good Friday";
+      movable[dateKey(easter)] = "Easter Sunday";
+      movable[dateKey(addDays(easter, 1))] = "Easter Monday";
+      movable[dateKey(addDays(easter, 50))] = "Holy Spirit Monday";
+      var holidays = {};
+      for (var k in FIXED_HOLIDAYS) {
+        var parts = k.split("-");
+        holidays[dateKey(new Date(year, +parts[0] - 1, +parts[1]))] = FIXED_HOLIDAYS[k];
+      }
+      var labourKey = dateKey(new Date(year, 4, 1));
+      if (!isWorkingDay(new Date(year, 4, 1)) || (labourKey in movable)) {
+        delete holidays[labourKey];
+        var observed = addDays(new Date(year, 4, 1), 1);
+        while (!isWorkingDay(observed) || (dateKey(observed) in movable) || (dateKey(observed) in holidays)) {
+          observed = addDays(observed, 1);
+        }
+        holidays[dateKey(observed)] = "Labour Day (observed)";
+      }
+      for (var mk in movable) { holidays[mk] = movable[mk]; }
+      return holidays;
+    }
+    function bankHolidaysBetween(start, end) {
+      // Greek public holidays strictly after start, up to and including end.
+      var holidays = {};
+      for (var y = start.getFullYear(); y <= end.getFullYear(); y++) {
+        var yh = greekHolidays(y);
+        for (var k in yh) { holidays[k] = yh[k]; }
+      }
+      var out = [];
+      for (var k in holidays) {
+        var p = k.split("-");
+        var d = new Date(+p[0], +p[1], +p[2]);
+        if (d > start && d <= end) { out.push({ date: d, name: holidays[k] }); }
+      }
+      out.sort(function (a, b) { return a.date - b.date; });
+      return out;
+    }
+    function computeCountdown(today) {
+      var target = nextChristmas(today);
+      // Calendar-day diff via UTC to stay DST-safe.
+      var calendarDays = Math.round(
+        (Date.UTC(target.getFullYear(), target.getMonth(), target.getDate()) -
+          Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 86400000
+      );
+      var workingDays = 0;
+      var weekendDays = 0;
+      // Iterate calendar days (not 24h steps) to survive DST transitions.
+      for (var i = 1; i <= calendarDays; i++) {
+        var day = addDays(today, i);
+        if (isWorkingDay(day)) { workingDays++; } else { weekendDays++; }
+      }
+      var holidays = bankHolidaysBetween(today, target);
+      var bankHolidayDays = 0;
+      for (var h = 0; h < holidays.length; h++) {
+        if (isWorkingDay(holidays[h].date)) { bankHolidayDays++; }
+      }
+      return {
+        target: target,
+        calendarDays: calendarDays,
+        workingDays: workingDays,
+        weekendDays: weekendDays,
+        bankHolidayDays: bankHolidayDays,
+        remaining: Math.max(workingDays - bankHolidayDays, 0),
+        isChristmas: today.getTime() === target.getTime()
+      };
+    }
+    function targetLabel(target) {
+      var weekday = target.toLocaleDateString("en-GB", { weekday: "long" });
+      var monthYear = target.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+      return weekday + ", " + target.getDate() + " " + monthYear;
+    }
+    function render() {
+      var today = startOfDay(new Date());
+      var c = computeCountdown(today);
+      var target = c.target;
+      var workingEl = document.getElementById("working");
+      var captionEl = document.getElementById("caption");
+      if (c.isChristmas) {
+        workingEl.textContent = "Merry Christmas!";
+        workingEl.style.fontSize = "clamp(2rem, 8vw, 4rem)";
+        captionEl.textContent = "Christmas Day \u2013 " + targetLabel(target);
+      } else {
+        workingEl.textContent = String(c.remaining);
+        var noun = c.remaining === 1 ? "working day" : "working days";
+        var holidayNoun = c.bankHolidayDays === 1 ? "Greek bank holiday" : "Greek bank holidays";
+        captionEl.textContent = noun + " until Christmas Day \u2013 " + targetLabel(target) +
+          " (" + c.workingDays + " weekdays minus " + c.bankHolidayDays + " " + holidayNoun + ")";
+      }
+      document.getElementById("calendar").textContent = String(c.calendarDays);
+      document.getElementById("weekend").textContent = String(c.weekendDays);
+      document.getElementById("bank").textContent = String(c.bankHolidayDays);
+      document.getElementById("weeks").textContent = String(Math.floor(c.calendarDays / 7));
+      return target;
+    }
+    var target = render();
+    var clockEl = document.getElementById("clock");
+    function pad(n) { return String(n).padStart(2, "0"); }
+    function tick() {
+      var remaining = target - new Date();
+      if (remaining <= 0) {
+        // Roll forward if we just passed midnight into Christmas Day.
+        target = render();
+        remaining = target - new Date();
+        if (remaining <= 0) { clockEl.textContent = "Merry Christmas!"; return; }
+      }
+      var total = Math.floor(remaining / 1000);
+      var days = Math.floor(total / 86400);
+      var hours = Math.floor((total % 86400) / 3600);
+      var minutes = Math.floor((total % 3600) / 60);
+      var seconds = total % 60;
+      clockEl.textContent = days + "d " + pad(hours) + "h " + pad(minutes) + "m " + pad(seconds) + "s of calendar time remaining";
+      setTimeout(tick, 1000);
+    }
+    tick();
+  </script>
+</body>
+</html>

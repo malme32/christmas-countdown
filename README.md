@@ -21,6 +21,8 @@ Then open <http://127.0.0.1:8000/> or:
 curl http://127.0.0.1:8000/                  # HTML countdown widget
 curl http://127.0.0.1:8000/calendar          # full month-by-month calendar
 curl http://127.0.0.1:8000/api/countdown     # JSON numbers
+curl http://127.0.0.1:8000/api/weather       # JSON weather (current/daily/weekly/monthly)
+curl "http://127.0.0.1:8000/api/weather?lat=51.5&lon=-0.12"  # custom location
 curl http://127.0.0.1:8000/healthz           # health check
 ```
 
@@ -44,6 +46,101 @@ Only holidays that fall on a working day are deducted from the countdown; those
 that land at the weekend are listed (and shown in the calendar) but do not
 change the total.
 
+## Weather feature
+
+The countdown page includes a **server-rendered weather section** showing the
+current conditions plus a daily, weekly and monthly forecast for the default
+location (Athens, Greece: 37.9838, 23.7275). Data comes from the
+[Open-Meteo](https://open-meteo.com/) forecast API (no API key needed) and is
+cached in memory per `(latitude, longitude)` with a 10-minute TTL
+(`WeatherCache`: thread-safe, bounded to 128 entries with oldest-timestamp
+eviction). Rendering is server-side only — the page emits no client-side
+`fetch()`, so it works under the restrictive CSP (`default-src 'none'`).
+
+### Configuration
+
+There are no weather-specific environment variables or CLI flags. The server
+CLI only exposes `--host` and `--port`. Weather is configured two ways:
+
+- **Per request:** `GET /api/weather?lat=<lat>&lon=<lon>` overrides the
+  location. Latitude must be -90..90, longitude -180..180; anything else
+  (non-numeric, missing pairing, out of range) returns `400` with an `error`
+  object.
+- **In code:** override the module-level constants in `christmas_countdown.py`
+  before calling `fetch_weather()` / `weather_summary()`:
+
+| Constant | Default | Description |
+|---|---|---|
+| `WEATHER_API_URL` | `https://api.open-meteo.com/v1/forecast` | Open-Meteo API base URL |
+| `WEATHER_CACHE_TTL` | `600` (seconds) | How long cached weather data stays valid |
+| `WEATHER_DEFAULT_LAT` | `37.9838` (Athens) | Default latitude |
+| `WEATHER_DEFAULT_LON` | `23.7275` (Athens) | Default longitude |
+| `WEATHER_FORECAST_DAYS` | `16` | Daily forecast days requested (Open-Meteo max) |
+
+### API: `GET /api/weather`
+
+Returns `200 OK` with current conditions, a `current` alias of those
+conditions, a `daily` per-day forecast (16 days max), `weekly` 7-day-chunk
+aggregates and `monthly` per-`YYYY-MM` aggregates, plus `latitude`,
+`longitude`, `source` and `cached_at` (UTC ISO-8601).
+
+Daily entries carry `date`, `weathercode`, `description`, `temp_max`,
+`temp_min`, `precipitation_sum`, `precipitation_probability` and
+`windspeed_max`. Weekly/monthly summaries carry `days`, `temp_avg`,
+`precipitation_total`, the dominant `weather_dominant` code and its
+`description` (plus `week_start` / `month`).
+
+When the upstream Open-Meteo API is unreachable or returns a malformed
+payload, the endpoint returns `200 OK` with an `error` object
+(`{"error": ..., "latitude": ..., "longitude": ...}`) — never a 5xx.
+Invalid `?lat=`/`?lon=` values return `400` with an `error` object.
+
+Weather codes follow the
+[WMO Weather interpretation codes](https://open-meteo.com/en/docs) standard
+(`translate_weather_code()`; unknown codes map to `"Unknown"`), rendered with
+Unicode icons (`weather_icon_for_code()`).
+
+### Attribution
+
+Weather data © Open-Meteo (CC BY 4.0). The rendered page footer and API
+`source` field credit `open-meteo`; see <https://open-meteo.com/> and
+<https://creativecommons.org/licenses/by/4.0/>.
+
+### Operations (production readiness)
+
+- **Production behaviour:** no API key, env vars, or CLI flags are needed for
+  weather. Upstream timeout is 10 s (`fetch_weather(timeout=...)`); on any
+  upstream or payload failure the API returns `200` with an `error` object
+  (never a 5xx) and `GET /` renders a "Weather currently unavailable."
+  fallback section, so the countdown stays up when Open-Meteo is down.
+- **Rate limits:** Open-Meteo's free API needs no key and is rate-limited
+  server-side. This app calls it at most once per `(lat, lon)` per 10 minutes
+  (`WEATHER_CACHE_TTL = 600`, thread-safe `WeatherCache`); cache hits serve
+  from memory with no upstream call. The cache is bounded to 128 entries
+  (oldest-timestamp eviction) and coordinates are validated
+  (`lat -90..90`, `lon -180..180`, `400` otherwise), so cycling `?lat=`/`?lon=`
+  cannot grow memory or fan out to upstream.
+- **Monitoring and logging:** access logs go to stderr
+  (`ChristmasCountdownHandler.log_message`); every weather upstream failure
+  logs one stderr line (`weather unavailable lat=.. lon=..: <reason>`) via
+  `weather_summary()`. Liveness: `GET /healthz` returns `{"status": "ok"}`
+  without touching upstream. Alert on a rising rate of `weather unavailable`
+  lines or on `/healthz` non-200.
+- **Rollback:** the weather feature is additive (new functions, one new route,
+  one optional template section). Roll back with `git revert <commit>` (or
+  check out the pre-weather commit) and restart:
+  `pkill -f 'christmas_countdown.py'`, then
+  `python3 christmas_countdown.py --host 127.0.0.1 --port 8000`.
+  No migrations, no external state; the in-memory cache is lost on restart.
+- **Performance benchmarks** (measured 2026-09-21, local, no network except
+  where noted): `countdown_summary` ~0.10 ms/op, `countdown_page` with full
+  16-day weather ~0.04 ms/op (~0.006 ms/op fallback), `aggregate_weekly`
+  ~0.020 ms/op, `aggregate_monthly` ~0.013 ms/op, `WeatherCache.get` hit
+  ~0.0005 ms/op. Live smoke (pinned date 2026-09-21): `/healthz` ~26 ms,
+  `/api/countdown` ~1 ms, `/api/weather` first fetch ~660 ms (upstream),
+  cache hit ~0.003 ms, `GET /` with warm cache ~644 ms first page (one
+  upstream fetch) then cache-speed.
+
 ## Defined behaviour
 
 - The target is the next **25 December** on or after today; on Christmas Day the
@@ -63,8 +160,21 @@ change the total.
   `target`, `calendar_days`, `working_days`, `bank_holiday_days`,
   `remaining_working_days`, `weekend_days`, `weeks`, `is_christmas` and
   `holidays` (a list of `{date, name, working_day}`).
+- `GET /api/weather` returns `200 OK` with current conditions, a `current`
+  alias, a `daily` per-day forecast, `weekly` 7-day-chunk aggregates and
+  `monthly` per-`YYYY-MM` aggregates, plus `latitude`, `longitude`, `source`
+  and `cached_at`. Optional `?lat=-90..90&lon=-180..180` overrides the default
+  (Athens 37.9838, 23.7275); invalid values return `400` with an `error`
+  object. When upstream Open-Meteo is unreachable or returns a malformed
+  payload, the endpoint returns `200 OK` with an `error` object (never a 5xx).
+- `GET /` embeds the same weather data as static server-rendered HTML below
+  the countdown facts (current conditions, 7-day cards, weekly/monthly
+  summaries). No client-side fetch is emitted, so the page works under the
+  restrictive CSP. When weather is unavailable the section shows a fallback
+  message. Weather data © Open-Meteo (CC BY 4.0).
 - `GET /healthz` returns `200 OK` with `{"status": "ok"}`.
-- Any other path returns `404 Not Found`; query strings are ignored when routing.
+- Any other path returns `404 Not Found`; query strings do not affect routing
+  except `/api/weather`, which honours `?lat=`/`?lon=`.
 - `HEAD` is supported for all routes (headers only, no body). Responses carry
   `X-Content-Type-Options: nosniff`, a restrictive `Content-Security-Policy` and
   `Referrer-Policy: no-referrer`. The HTML countdown page's inline script is
@@ -80,6 +190,26 @@ change the total.
 ```bash
 python3 -m unittest -v test_christmas_countdown.py
 ```
+
+# Static Christmas countdown (`index.html`, GitHub Pages)
+
+`index.html` is a dependency-free static Christmas countdown for GitHub Pages:
+no backend, no build step, no network calls.
+
+- Client-side mirror of the Python logic: the target is the next **25 December**
+  on or after today; **working days** are Monday-Friday strictly after today, up
+  to and including the target, minus the **Greek public holidays** (fixed dates
+  plus Orthodox Easter computus, verified against the Python implementation).
+  The headline is `remaining_working_days`.
+- Shows the working-days headline (or `Merry Christmas!`), calendar/weekend/full
+  weeks facts, and a live clock ticking to local midnight on the target date.
+- Run: `python3 -m http.server 8000`, then open <http://localhost:8000/>.
+- Note: the Python server features (`/api/*`, `/calendar`, server-rendered
+  weather) cannot run on Pages; use `christmas_countdown.py` for the full app.
+- Pacman lives in `malme32/pacman-web-app`; it is not part of this repo's Pages
+  output.
+
+---
 
 # Olympiacos next matches
 

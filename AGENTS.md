@@ -18,6 +18,23 @@
   test as `test_<module>.py`.
 - CLIs use `argparse` and return an `int` exit status from `main()`.
 
+## Christmas countdown weather feature
+
+- Weather lives in `christmas_countdown.py` (single-file, Open-Meteo, no key):
+  `fetch_weather`, `weather_summary`, `translate_weather_code`,
+  `weather_icon_for_code`, `datetime_now_utc_iso`, `WeatherCache` (bounded to
+  128 entries, TTL), `_parse_daily_forecast`, `_dominant_weather_code`,
+  `aggregate_weekly`, `aggregate_monthly`, `_render_weather_section`
+  (with `_fmt_temp_celsius` / `_fmt_wind` / `_fmt_precip` helpers),
+  `_parse_weather_coords`, plus `GET /api/weather` on
+  `ChristmasCountdownHandler` and server-rendered weather in `countdown_page()`.
+- Constants: `WEATHER_API_URL`, `WEATHER_CACHE_TTL`, `WEATHER_DEFAULT_LAT`,
+  `WEATHER_DEFAULT_LON`, `WEATHER_FORECAST_DAYS`, `WEATHER_SOURCE`,
+  `WEATHER_CODES`, `WEATHER_ICONS`, `WEATHER_ICON_FALLBACK`.
+- Server-side only: no client-side fetch (CSP `default-src 'none'`); outbound
+  query built with `urllib.parse.urlencode`; coordinates validated
+  (lat -90..90, lon -180..180); attribution `Weather data © Open-Meteo (CC BY 4.0)`.
+
 ## Commands
 
 Run everything:
@@ -39,6 +56,19 @@ Run just the Christmas countdown tests and start it locally:
 python3 -m unittest -v test_christmas_countdown.py
 python3 christmas_countdown.py --port 8000
 ```
+
+## Static Pages countdown (`index.html`)
+
+- `index.html` is a dependency-free static Christmas countdown for GitHub Pages:
+  no backend, no build step, no network calls.
+- Client-side mirror of `christmas_countdown.py` logic: next 25 December on or
+  after today; working days are Monday-Friday strictly after today up to and
+  including the target, minus Greek public holidays (fixed + Orthodox Easter
+  computus, verified against the Python implementation). Live clock ticks to
+  local midnight on the target date.
+- Serve locally: `python3 -m http.server 8000` then open <http://localhost:8000/>.
+- The Python server (`christmas_countdown.py`,incl. weather) cannot run on Pages.
+- Pacman lives in `malme32/pacman-web-app`; do not add it here.
 
 ## Definition of done
 
