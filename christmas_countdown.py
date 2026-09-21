@@ -196,6 +196,54 @@ def translate_weather_code(code: int) -> str:
     return WEATHER_CODES.get(code, "Unknown")
 
 
+# Emoji/Unicode icons per WMO weather code (no image assets needed).
+WEATHER_ICONS: dict[int, str] = {
+    0: "\u2600\ufe0f",  # ☀️ clear sky
+    1: "\U0001f324\ufe0f",  # 🌤️ mainly clear
+    2: "\u26c5",  # ⛅ partly cloudy
+    3: "\u2601\ufe0f",  # ☁️ overcast
+    45: "\U0001f32b\ufe0f",  # 🌫️ fog
+    48: "\U0001f32b\ufe0f",  # 🌫️ depositing rime fog
+    51: "\U0001f326\ufe0f",  # 🌦️ light drizzle
+    53: "\U0001f326\ufe0f",  # 🌦️ moderate drizzle
+    55: "\U0001f326\ufe0f",  # 🌦️ dense drizzle
+    56: "\U0001f326\ufe0f",  # 🌦️ light freezing drizzle
+    57: "\U0001f326\ufe0f",  # 🌦️ dense freezing drizzle
+    61: "\U0001f327\ufe0f",  # 🌧️ slight rain
+    63: "\U0001f327\ufe0f",  # 🌧️ moderate rain
+    65: "\U0001f327\ufe0f",  # 🌧️ heavy rain
+    66: "\U0001f327\ufe0f",  # 🌧️ light freezing rain
+    67: "\U0001f327\ufe0f",  # 🌧️ heavy freezing rain
+    71: "\U0001f328\ufe0f",  # 🌨️ slight snow fall
+    73: "\U0001f328\ufe0f",  # 🌨️ moderate snow fall
+    75: "\U0001f328\ufe0f",  # 🌨️ heavy snow fall
+    77: "\U0001f328\ufe0f",  # 🌨️ snow grains
+    80: "\U0001f327\ufe0f",  # 🌧️ slight rain showers
+    81: "\U0001f327\ufe0f",  # 🌧️ moderate rain showers
+    82: "\U0001f327\ufe0f",  # 🌧️ violent rain showers
+    85: "\U0001f328\ufe0f",  # 🌨️ slight snow showers
+    86: "\U0001f328\ufe0f",  # 🌨️ heavy snow showers
+    95: "\u26c8\ufe0f",  # ⛈️ thunderstorm
+    96: "\u26c8\ufe0f",  # ⛈️ thunderstorm with slight hail
+    99: "\u26c8\ufe0f",  # ⛈️ thunderstorm with heavy hail
+}
+
+WEATHER_ICON_FALLBACK = "\u2753"  # ❓ unknown code
+
+
+def weather_icon_for_code(code: object) -> str:
+    """Return an emoji/Unicode icon for a WMO weather code.
+
+    Returns ``WEATHER_ICON_FALLBACK`` for missing or unrecognized codes so
+    callers never have to handle ``None``.
+    """
+    if isinstance(code, bool):
+        return WEATHER_ICON_FALLBACK
+    if isinstance(code, int):
+        return WEATHER_ICONS.get(code, WEATHER_ICON_FALLBACK)
+    return WEATHER_ICON_FALLBACK
+
+
 def datetime_now_utc_iso() -> str:
     """Return the current UTC time as an ISO-8601 string for payload metadata."""
     return datetime.now(timezone.utc).isoformat()
@@ -473,6 +521,8 @@ def _render_weather_section(weather: dict | None) -> str:
     temp = _fmt_temp_celsius(current.get("temperature", weather.get("temperature")))
     description = str(current.get("description", weather.get("description", "Unknown")))
     wind = _fmt_wind(current.get("windspeed", weather.get("windspeed")))
+    current_code = current.get("weathercode", weather.get("weathercode"))
+    current_icon = weather_icon_for_code(current_code)
 
     daily = weather.get("daily")
     daily_cards = daily if isinstance(daily, list) else []
@@ -487,24 +537,31 @@ def _render_weather_section(weather: dict | None) -> str:
     parts.append('      <section class="weather" aria-label="Weather forecast">\n')
     parts.append('        <h2 class="weather-title">Athens weather</h2>\n')
     parts.append('        <div class="weather-current">\n')
-    parts.append(f'          <div class="weather-temp">{escape(temp)}</div>\n')
-    parts.append(f'          <div class="weather-desc">{escape(description)}</div>\n')
-    parts.append(f'          <div class="weather-wind">Wind {escape(wind)}</div>\n')
+    parts.append(
+        f'          <span class="weather-icon weather-icon-lg" aria-hidden="true">{current_icon}</span>\n'
+    )
+    parts.append('          <div class="weather-details">\n')
+    parts.append(f'            <div class="weather-temp">{escape(temp)}</div>\n')
+    parts.append(f'            <div class="weather-desc">{escape(description)}</div>\n')
+    parts.append(f'            <div class="weather-wind">Wind {escape(wind)}</div>\n')
+    parts.append("          </div>\n")
     parts.append("        </div>\n")
 
     parts.append('        <h3 class="weather-subtitle">7-day forecast</h3>\n')
     if forecast:
-        parts.append('        <div class="forecast-grid">\n')
+        parts.append('        <div class="forecast-grid" role="list">\n')
         for day in forecast:
             if not isinstance(day, dict):
                 continue
             day_date = escape(str(day.get("date", "–")))
             day_desc = escape(str(day.get("description", "Unknown")))
+            day_icon = weather_icon_for_code(day.get("weathercode"))
             hi = escape(_fmt_temp_celsius(day.get("temp_max")))
             lo = escape(_fmt_temp_celsius(day.get("temp_min")))
             prob = escape(_fmt_precip(day.get("precipitation_probability"), "%"))
-            parts.append('          <div class="forecast-card">\n')
+            parts.append('          <div class="forecast-card" role="listitem">\n')
             parts.append(f'            <b>{day_date}</b>\n')
+            parts.append(f'            <span class="weather-icon" aria-hidden="true">{day_icon}</span>\n')
             parts.append(f'            <span class="forecast-desc">{day_desc}</span>\n')
             parts.append(f'            <span class="forecast-temps">{hi} / {lo}</span>\n')
             parts.append(f'            <span class="forecast-precip">Rain {prob}</span>\n')
@@ -524,8 +581,10 @@ def _render_weather_section(weather: dict | None) -> str:
             avg = escape(_fmt_temp_celsius(week.get("temp_avg")))
             total = escape(_fmt_precip(week.get("precipitation_total"), " mm"))
             wdesc = escape(str(week.get("description", "Unknown")))
+            wicon = weather_icon_for_code(week.get("weather_dominant"))
             parts.append(
                 f'          <div class="summary-row"><b>{start}</b>'
+                f'<span class="weather-icon weather-icon-sm" aria-hidden="true">{wicon}</span>'
                 f"<span>{escape(str(days))} days · avg {avg} · "
                 f"rain {total} · {wdesc}</span></div>\n"
             )
@@ -544,8 +603,10 @@ def _render_weather_section(weather: dict | None) -> str:
             avg = escape(_fmt_temp_celsius(month.get("temp_avg")))
             total = escape(_fmt_precip(month.get("precipitation_total"), " mm"))
             mdesc = escape(str(month.get("description", "Unknown")))
+            micon = weather_icon_for_code(month.get("weather_dominant"))
             parts.append(
                 f'          <div class="summary-row"><b>{name}</b>'
+                f'<span class="weather-icon weather-icon-sm" aria-hidden="true">{micon}</span>'
                 f"<span>{escape(str(days))} days · avg {avg} · "
                 f"rain {total} · {mdesc}</span></div>\n"
             )
@@ -630,28 +691,46 @@ def countdown_page(
         "    .clock { margin-top: 2rem; font-variant-numeric: tabular-nums; font-size: 1.1rem; color: #b7f0d0; }\n"
         "    .weather { margin-top: 2rem; border-top: 1px solid rgba(255,255,255,.1); padding-top: 1.5rem; }\n"
         "    .weather-title { margin: 0 0 .75rem; font-size: 1.1rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: #b7f0d0; }\n"
-        "    .weather-current { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); border-radius: .75rem; padding: 1rem; }\n"
-        "    .weather-temp { font-size: 2.5rem; font-weight: 800; color: #fff; line-height: 1; }\n"
+        "    .weather-current { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); border-radius: .75rem; padding: 1rem 1.25rem; display: flex; align-items: center; gap: 1.25rem; text-align: left; }\n"
+        "    .weather-details { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }\n"
+        "    .weather-icon { font-size: 1.75rem; line-height: 1; flex-shrink: 0; }\n"
+        "    .weather-icon-lg { font-size: 3rem; }\n"
+        "    .weather-icon-sm { font-size: 1.1rem; }\n"
+        "    .weather-temp { font-size: 2.5rem; font-weight: 800; color: #fff; line-height: 1; font-variant-numeric: tabular-nums; }\n"
         "    .weather-desc { margin-top: .25rem; font-size: 1.05rem; color: #cfe9d8; }\n"
         "    .weather-wind { margin-top: .25rem; font-size: .85rem; color: #9fc9b0; }\n"
         "    .weather-subtitle { margin: 1.25rem 0 .6rem; font-size: .85rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: #9fc9b0; }\n"
         "    .forecast-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .6rem; }\n"
-        "    .forecast-card { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); border-radius: .6rem; padding: .6rem .5rem; display: flex; flex-direction: column; gap: .2rem; }\n"
+        "    .forecast-card { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); border-radius: .6rem; padding: .6rem .5rem; display: flex; flex-direction: column; align-items: center; text-align: center; gap: .25rem; }\n"
         "    .forecast-card b { font-size: .8rem; color: #fff; }\n"
+        "    .forecast-card .weather-icon { font-size: 1.5rem; }\n"
         "    .forecast-desc { font-size: .75rem; color: #cfe9d8; }\n"
         "    .forecast-temps { font-size: .8rem; color: #fff; font-variant-numeric: tabular-nums; }\n"
         "    .forecast-precip { font-size: .72rem; color: #9fc9b0; }\n"
         "    .summary-list { display: flex; flex-direction: column; gap: .45rem; }\n"
-        "    .summary-row { background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); border-radius: .6rem; padding: .55rem .7rem; display: flex; gap: .6rem; align-items: baseline; justify-content: space-between; text-align: left; }\n"
+        "    .summary-row { background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); border-radius: .6rem; padding: .55rem .7rem; display: flex; gap: .6rem; align-items: center; justify-content: space-between; text-align: left; }\n"
         "    .summary-row b { color: #fff; font-size: .85rem; white-space: nowrap; }\n"
-        "    .summary-row span { color: #cfe9d8; font-size: .8rem; }\n"
+        "    .summary-row span:last-child { color: #cfe9d8; font-size: .8rem; }\n"
         "    .weather-source { margin: .9rem 0 0; font-size: .72rem; color: #9fc9b0; }\n"
         "    .weather-unavailable { color: #cfe9d8; font-size: .9rem; }\n"
+        "    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }\n"
+        "    :focus-visible { outline: 2px solid #b7f0d0; outline-offset: 2px; border-radius: .25rem; }\n"
+        "    @media (max-width: 1024px) {\n"
+        "      .forecast-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }\n"
+        "    }\n"
         "    @media (max-width: 700px) {\n"
         "      main { padding: 1rem; }\n"
         "      .card { padding: 1.5rem 1.25rem; }\n"
+        "      .weather-current { flex-direction: column; text-align: center; gap: .5rem; }\n"
+        "      .weather-details { align-items: center; }\n"
         "      .forecast-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }\n"
-        "      .summary-row { flex-direction: column; gap: .15rem; }\n"
+        "      .summary-row { flex-wrap: wrap; gap: .35rem; }\n"
+        "    }\n"
+        "    @media (prefers-reduced-motion: reduce) {\n"
+        "      *, *::before, *::after { animation: none !important; transition: none !important; }\n"
+        "    }\n"
+        "    @media (forced-colors: active) {\n"
+        "      .card, .fact, .weather-current, .forecast-card, .summary-row { border: 1px solid CanvasText; }\n"
         "    }\n"
         "  </style>\n"
         "</head>\n"
