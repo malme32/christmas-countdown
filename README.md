@@ -16,8 +16,10 @@ python3 christmas_countdown.py --host 0.0.0.0     # all interfaces
 Then open <http://127.0.0.1:8000/> or:
 
 ```bash
-curl http://127.0.0.1:8000/                  # HTML widget
+curl http://127.0.0.1:8000/                  # HTML widget (includes server-rendered weather)
 curl http://127.0.0.1:8000/api/countdown     # JSON numbers
+curl http://127.0.0.1:8000/api/weather       # JSON weather (current/daily/weekly/monthly)
+curl "http://127.0.0.1:8000/api/weather?lat=51.5&lon=-0.12"  # custom location
 curl http://127.0.0.1:8000/healthz           # health check
 ```
 
@@ -33,8 +35,22 @@ curl http://127.0.0.1:8000/healthz           # health check
 - `GET /api/countdown` returns `200 OK` with a JSON object containing `today`,
   `target`, `calendar_days`, `working_days`, `weekend_days`, `weeks` and
   `is_christmas`.
+- `GET /api/weather` returns `200 OK` with a JSON object containing `current`
+  (temperature, windspeed, winddirection, weathercode, description),
+  `daily` per-day entries, `weekly` 7-day aggregates, `monthly` per-month
+  aggregates, plus `latitude`, `longitude`, `source` and `cached_at`.
+  Optional `?lat=-90..90&lon=-180..180` overrides the default (Athens
+  37.9838, 23.7275); invalid values return `400` with an `error` object.
+  When the upstream Open-Meteo API is unreachable or returns a malformed
+  payload, the endpoint returns `200 OK` with an `error` object (never a 5xx).
+- `GET /` embeds the same weather data as static server-rendered HTML below
+  the countdown facts (current conditions, 7-day cards, weekly/monthly
+  summaries). No client-side fetch is emitted, so the page works under the
+  restrictive CSP. When weather is unavailable the section shows a fallback
+  message. Weather data © Open-Meteo (CC BY 4.0).
 - `GET /healthz` returns `200 OK` with `{"status": "ok"}`.
-- Any other path returns `404 Not Found`; query strings are ignored when routing.
+- Any other path returns `404 Not Found`; query strings do not affect routing
+  except `/api/weather`, which honours `?lat=`/`?lon=`.
 - `HEAD` is supported for all routes (headers only, no body). Responses carry
   `X-Content-Type-Options: nosniff`, a restrictive `Content-Security-Policy` and
   `Referrer-Policy: no-referrer`. The HTML page's inline script is authorised by
@@ -50,6 +66,63 @@ curl http://127.0.0.1:8000/healthz           # health check
 ```bash
 python3 -m unittest -v test_christmas_countdown.py
 ```
+
+---
+
+# Pacman web app
+
+A dependency-free Pacman game built with plain HTML, CSS, JavaScript and the
+Canvas API. There is no build step and no third-party dependency; the core game
+logic is separated from the canvas/input layer so it can be unit tested.
+
+## Run
+
+```sh
+python3 -m http.server 8000
+```
+
+Then open <http://localhost:8000/>.
+
+## Controls
+
+- Move: arrow keys or `WASD`
+- Mute: `M` (or the on-screen button)
+- Pause / resume: `P`
+- Start / play again: `Enter` or `Space`
+
+## Tests
+
+```sh
+node --test test/
+# or
+npm test
+```
+
+## Layout
+
+- `index.html` - page shell, HUD and canvas.
+- `styles.css` - presentation only.
+- `src/core/` - pure game logic: `maze.js`, `movement.js`, `player.js`,
+  `ghost.js`, `game.js` (fixed 60 Hz timestep) and `constants.js`.
+- `src/ui/` - `render.js` (canvas), `input.js` (keyboard) and `audio.js`
+  (Web Audio cues synthesised at runtime; pure `cueFor(event)`).
+- `src/main.js` - bootstrap and the `requestAnimationFrame` loop.
+- `test/` - Node unit tests (`node:test`) for the core and pure UI helpers.
+
+## Rules and data model
+
+- 28x31 tile maze with 238 pellets and 4 power pellets (242 in total).
+- One player and four ghosts (Blinky, Pinky, Inky, Clyde) with scatter/chase
+  targeting and a frightened state after a power pellet.
+- Scoring: pellet 10, power pellet 50, frightened ghosts 200/400/800/1600.
+- A life is lost when the player's tile overlaps a non-eaten ghost; three lives
+  start, and losing them all ends the game.
+- Eating every pellet completes the level (5 levels); clearing the final level
+  wins. The tunnel edges wrap horizontally.
+- Movement, collision and ghost AI run on a fixed 60 Hz timestep, decoupled from
+  rendering.
+
+---
 
 # Olympiacos next matches
 
