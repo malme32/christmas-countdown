@@ -432,11 +432,145 @@ def _target_label(target: str) -> str:
     return f"{parsed.strftime('%A')}, {parsed.day} {parsed.strftime('%B %Y')}"
 
 
-def countdown_page(summary: dict[str, object], nonce: str | None = None) -> str:
+def _fmt_temp_celsius(value: object) -> str:
+    """Format a temperature value as ``°C`` or an en-dash when missing."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "–"
+    return f"{value}°C"
+
+
+def _fmt_wind(value: object) -> str:
+    """Format a wind speed value as ``km/h`` or an en-dash when missing."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "–"
+    return f"{value} km/h"
+
+
+def _fmt_precip(value: object, suffix: str) -> str:
+    """Format precipitation amount/probability or an en-dash when missing."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "–"
+    return f"{value}{suffix}"
+
+
+def _render_weather_section(weather: dict | None) -> str:
+    """Render the server-side weather ``<section>`` for ``countdown_page``.
+
+    All data is rendered as static HTML: no client-side fetch is emitted, so
+    the section works under a ``script-src`` CSP with no external access.
+    A missing or ``{"error": ...}`` payload renders a graceful fallback.
+    """
+    if not isinstance(weather, dict) or "error" in weather:
+        return (
+            '      <section class="weather" aria-label="Weather forecast">\n'
+            '        <h2 class="weather-title">Athens weather</h2>\n'
+            '        <p class="weather-unavailable">Weather currently unavailable.</p>\n'
+            "      </section>\n"
+        )
+    current = weather.get("current")
+    if not isinstance(current, dict):
+        current = {}
+    temp = _fmt_temp_celsius(current.get("temperature", weather.get("temperature")))
+    description = str(current.get("description", weather.get("description", "Unknown")))
+    wind = _fmt_wind(current.get("windspeed", weather.get("windspeed")))
+
+    daily = weather.get("daily")
+    daily_cards = daily if isinstance(daily, list) else []
+    forecast = daily_cards[:7]
+
+    weekly = weather.get("weekly")
+    weekly_rows = weekly if isinstance(weekly, list) else []
+    monthly = weather.get("monthly")
+    monthly_rows = monthly if isinstance(monthly, list) else []
+
+    parts: list[str] = []
+    parts.append('      <section class="weather" aria-label="Weather forecast">\n')
+    parts.append('        <h2 class="weather-title">Athens weather</h2>\n')
+    parts.append('        <div class="weather-current">\n')
+    parts.append(f'          <div class="weather-temp">{escape(temp)}</div>\n')
+    parts.append(f'          <div class="weather-desc">{escape(description)}</div>\n')
+    parts.append(f'          <div class="weather-wind">Wind {escape(wind)}</div>\n')
+    parts.append("        </div>\n")
+
+    parts.append('        <h3 class="weather-subtitle">7-day forecast</h3>\n')
+    if forecast:
+        parts.append('        <div class="forecast-grid">\n')
+        for day in forecast:
+            if not isinstance(day, dict):
+                continue
+            day_date = escape(str(day.get("date", "–")))
+            day_desc = escape(str(day.get("description", "Unknown")))
+            hi = escape(_fmt_temp_celsius(day.get("temp_max")))
+            lo = escape(_fmt_temp_celsius(day.get("temp_min")))
+            prob = escape(_fmt_precip(day.get("precipitation_probability"), "%"))
+            parts.append('          <div class="forecast-card">\n')
+            parts.append(f'            <b>{day_date}</b>\n')
+            parts.append(f'            <span class="forecast-desc">{day_desc}</span>\n')
+            parts.append(f'            <span class="forecast-temps">{hi} / {lo}</span>\n')
+            parts.append(f'            <span class="forecast-precip">Rain {prob}</span>\n')
+            parts.append("          </div>\n")
+        parts.append("        </div>\n")
+    else:
+        parts.append('        <p class="weather-unavailable">Forecast currently unavailable.</p>\n')
+
+    parts.append('        <h3 class="weather-subtitle">Weekly summary</h3>\n')
+    if weekly_rows:
+        parts.append('        <div class="summary-list">\n')
+        for week in weekly_rows:
+            if not isinstance(week, dict):
+                continue
+            start = escape(str(week.get("week_start", "–")))
+            days = week.get("days", "–")
+            avg = escape(_fmt_temp_celsius(week.get("temp_avg")))
+            total = escape(_fmt_precip(week.get("precipitation_total"), " mm"))
+            wdesc = escape(str(week.get("description", "Unknown")))
+            parts.append(
+                f'          <div class="summary-row"><b>{start}</b>'
+                f"<span>{escape(str(days))} days · avg {avg} · "
+                f"rain {total} · {wdesc}</span></div>\n"
+            )
+        parts.append("        </div>\n")
+    else:
+        parts.append('        <p class="weather-unavailable">Weekly summary unavailable.</p>\n')
+
+    parts.append('        <h3 class="weather-subtitle">Monthly summary</h3>\n')
+    if monthly_rows:
+        parts.append('        <div class="summary-list">\n')
+        for month in monthly_rows:
+            if not isinstance(month, dict):
+                continue
+            name = escape(str(month.get("month", "–")))
+            days = month.get("days", "–")
+            avg = escape(_fmt_temp_celsius(month.get("temp_avg")))
+            total = escape(_fmt_precip(month.get("precipitation_total"), " mm"))
+            mdesc = escape(str(month.get("description", "Unknown")))
+            parts.append(
+                f'          <div class="summary-row"><b>{name}</b>'
+                f"<span>{escape(str(days))} days · avg {avg} · "
+                f"rain {total} · {mdesc}</span></div>\n"
+            )
+        parts.append("        </div>\n")
+    else:
+        parts.append('        <p class="weather-unavailable">Monthly summary unavailable.</p>\n')
+
+    source = weather.get("source")
+    if isinstance(source, str) and source:
+        parts.append(f'        <p class="weather-source">Source: {escape(source)}</p>\n')
+    parts.append("      </section>\n")
+    return "".join(parts)
+
+
+def countdown_page(
+    summary: dict[str, object],
+    nonce: str | None = None,
+    weather: dict | None = None,
+) -> str:
     """Return the HTML document for the Christmas countdown widget.
 
     When ``nonce`` is provided it is added to the inline ``<script>`` tag so the
     matching ``Content-Security-Policy`` can avoid ``script-src 'unsafe-inline'``.
+    When ``weather`` is provided it is rendered server-side as a static section
+    below the countdown facts; no client-side fetch is emitted.
     """
     target = str(summary["target"])
     working_days = int(summary["working_days"])
@@ -454,6 +588,7 @@ def countdown_page(summary: dict[str, object], nonce: str | None = None) -> str:
         caption = f"{noun} until Christmas Day - {_target_label(target)}"
 
     script_nonce = f' nonce="{escape(nonce)}"' if nonce else ""
+    weather_section = _render_weather_section(weather)
 
     return (
         "<!DOCTYPE html>\n"
@@ -493,6 +628,31 @@ def countdown_page(summary: dict[str, object], nonce: str | None = None) -> str:
         "    .fact b { display: block; font-size: 1.4rem; color: #fff; }\n"
         "    .fact span { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: #9fc9b0; }\n"
         "    .clock { margin-top: 2rem; font-variant-numeric: tabular-nums; font-size: 1.1rem; color: #b7f0d0; }\n"
+        "    .weather { margin-top: 2rem; border-top: 1px solid rgba(255,255,255,.1); padding-top: 1.5rem; }\n"
+        "    .weather-title { margin: 0 0 .75rem; font-size: 1.1rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: #b7f0d0; }\n"
+        "    .weather-current { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); border-radius: .75rem; padding: 1rem; }\n"
+        "    .weather-temp { font-size: 2.5rem; font-weight: 800; color: #fff; line-height: 1; }\n"
+        "    .weather-desc { margin-top: .25rem; font-size: 1.05rem; color: #cfe9d8; }\n"
+        "    .weather-wind { margin-top: .25rem; font-size: .85rem; color: #9fc9b0; }\n"
+        "    .weather-subtitle { margin: 1.25rem 0 .6rem; font-size: .85rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: #9fc9b0; }\n"
+        "    .forecast-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .6rem; }\n"
+        "    .forecast-card { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); border-radius: .6rem; padding: .6rem .5rem; display: flex; flex-direction: column; gap: .2rem; }\n"
+        "    .forecast-card b { font-size: .8rem; color: #fff; }\n"
+        "    .forecast-desc { font-size: .75rem; color: #cfe9d8; }\n"
+        "    .forecast-temps { font-size: .8rem; color: #fff; font-variant-numeric: tabular-nums; }\n"
+        "    .forecast-precip { font-size: .72rem; color: #9fc9b0; }\n"
+        "    .summary-list { display: flex; flex-direction: column; gap: .45rem; }\n"
+        "    .summary-row { background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); border-radius: .6rem; padding: .55rem .7rem; display: flex; gap: .6rem; align-items: baseline; justify-content: space-between; text-align: left; }\n"
+        "    .summary-row b { color: #fff; font-size: .85rem; white-space: nowrap; }\n"
+        "    .summary-row span { color: #cfe9d8; font-size: .8rem; }\n"
+        "    .weather-source { margin: .9rem 0 0; font-size: .72rem; color: #9fc9b0; }\n"
+        "    .weather-unavailable { color: #cfe9d8; font-size: .9rem; }\n"
+        "    @media (max-width: 700px) {\n"
+        "      main { padding: 1rem; }\n"
+        "      .card { padding: 1.5rem 1.25rem; }\n"
+        "      .forecast-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }\n"
+        "      .summary-row { flex-direction: column; gap: .15rem; }\n"
+        "    }\n"
         "  </style>\n"
         "</head>\n"
         "<body>\n"
@@ -507,6 +667,7 @@ def countdown_page(summary: dict[str, object], nonce: str | None = None) -> str:
         f'        <div class="fact"><b>{weeks}</b><span>full weeks</span></div>\n'
         "      </div>\n"
         '      <p class="clock" id="clock">Loading clock...</p>\n'
+        f"{weather_section}"
         "    </div>\n"
         "  </main>\n"
         f"  <script{script_nonce}>\n"
@@ -583,7 +744,11 @@ class ChristmasCountdownHandler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/":
             nonce = secrets.token_urlsafe(16)
-            body = countdown_page(countdown_summary(self._today()), nonce=nonce).encode("utf-8")
+            body = countdown_page(
+                countdown_summary(self._today()),
+                nonce=nonce,
+                weather=weather_summary(),
+            ).encode("utf-8")
             return 200, body, "text/html; charset=utf-8", _content_security_policy(nonce)
         if path == "/api/countdown":
             body = json.dumps(countdown_summary(self._today())).encode("utf-8")
