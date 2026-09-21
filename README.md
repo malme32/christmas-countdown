@@ -3,7 +3,9 @@
 `christmas_countdown.py` is a dependency-free web app built on the Python
 standard library's `http.server`. It serves a Christmas countdown widget whose
 headline number is the remaining **working days** (Monday-Friday) until
-Christmas Day, alongside calendar days, weekend days and a live clock.
+Christmas Day **after deducting the Greek public (bank) holidays** that fall in
+the period. It also renders a full month-by-month calendar and exposes the same
+numbers as JSON.
 
 ## Usage
 
@@ -16,12 +18,33 @@ python3 christmas_countdown.py --host 0.0.0.0     # all interfaces
 Then open <http://127.0.0.1:8000/> or:
 
 ```bash
-curl http://127.0.0.1:8000/                  # HTML widget (includes server-rendered weather)
+curl http://127.0.0.1:8000/                  # HTML countdown widget
+curl http://127.0.0.1:8000/calendar          # full month-by-month calendar
 curl http://127.0.0.1:8000/api/countdown     # JSON numbers
 curl http://127.0.0.1:8000/api/weather       # JSON weather (current/daily/weekly/monthly)
 curl "http://127.0.0.1:8000/api/weather?lat=51.5&lon=-0.12"  # custom location
 curl http://127.0.0.1:8000/healthz           # health check
 ```
+
+## Greek bank holidays
+
+The holiday set is computed deterministically from the calendar (no data files
+or network access):
+
+- **Fixed**: 1 Jan (New Year's Day), 6 Jan (Epiphany), 25 Mar (Independence
+  Day), 1 May (Labour Day), 15 Aug (Assumption), 28 Oct (Ochi Day),
+  25 Dec (Christmas Day) and 26 Dec (Second Day of Christmas).
+- **Movable** (relative to Orthodox Easter Sunday, computed with the Meeus
+  Julian algorithm): Clean Monday (Easter - 48 days), Good Friday (Easter - 2),
+  Easter Sunday, Easter Monday (Easter + 1) and Holy Spirit Monday (Easter + 50).
+- **Labour Day transfer**: when 1 May falls on a weekend or coincides with
+  another public holiday, Greek law moves it to the next working day that is
+  not already a holiday (e.g. 2022 → Mon 2 May, 2021 and 2027 → Tue 4 May after
+  Easter Monday). The observed date is returned instead of 1 May.
+
+Only holidays that fall on a working day are deducted from the countdown; those
+that land at the weekend are listed (and shown in the calendar) but do not
+change the total.
 
 ## Weather feature
 
@@ -123,20 +146,26 @@ Weather data © Open-Meteo (CC BY 4.0). The rendered page footer and API
 - The target is the next **25 December** on or after today; on Christmas Day the
   countdown is zero and the page shows `Merry Christmas!`. After Christmas the
   target rolls forward to the following year.
-- **Working days** are Monday-Friday strictly after today, up to and including
-  the target. Weekends are excluded; public holidays are **not** excluded, so
-  the count is deterministic and needs no data files or network access.
-- `GET /` returns `200 OK` with the HTML widget.
+- `working_days` counts Monday-Friday strictly after today up to and including
+  the target. `bank_holiday_days` counts the Greek public holidays in that
+  window that fall on a working day, and `remaining_working_days` is
+  `working_days - bank_holiday_days` (never below zero). The headline number is
+  `remaining_working_days`.
+- `GET /` returns `200 OK` with the HTML widget, the holiday list and a link to
+  the calendar.
+- `GET /calendar` returns `200 OK` with an HTML calendar for every month from
+  the current one through the target month, highlighting weekends, bank
+  holidays, today and Christmas Day. It contains no JavaScript.
 - `GET /api/countdown` returns `200 OK` with a JSON object containing `today`,
-  `target`, `calendar_days`, `working_days`, `weekend_days`, `weeks` and
-  `is_christmas`.
-- `GET /api/weather` returns `200 OK` with a JSON object containing `current`
-  (temperature, windspeed, winddirection, weathercode, description),
-  `daily` per-day entries, `weekly` 7-day aggregates, `monthly` per-month
-  aggregates, plus `latitude`, `longitude`, `source` and `cached_at`.
-  Optional `?lat=-90..90&lon=-180..180` overrides the default (Athens
-  37.9838, 23.7275); invalid values return `400` with an `error` object.
-  When the upstream Open-Meteo API is unreachable or returns a malformed
+  `target`, `calendar_days`, `working_days`, `bank_holiday_days`,
+  `remaining_working_days`, `weekend_days`, `weeks`, `is_christmas` and
+  `holidays` (a list of `{date, name, working_day}`).
+- `GET /api/weather` returns `200 OK` with current conditions, a `current`
+  alias, a `daily` per-day forecast, `weekly` 7-day-chunk aggregates and
+  `monthly` per-`YYYY-MM` aggregates, plus `latitude`, `longitude`, `source`
+  and `cached_at`. Optional `?lat=-90..90&lon=-180..180` overrides the default
+  (Athens 37.9838, 23.7275); invalid values return `400` with an `error`
+  object. When upstream Open-Meteo is unreachable or returns a malformed
   payload, the endpoint returns `200 OK` with an `error` object (never a 5xx).
 - `GET /` embeds the same weather data as static server-rendered HTML below
   the countdown facts (current conditions, 7-day cards, weekly/monthly
@@ -148,8 +177,8 @@ Weather data © Open-Meteo (CC BY 4.0). The rendered page footer and API
   except `/api/weather`, which honours `?lat=`/`?lon=`.
 - `HEAD` is supported for all routes (headers only, no body). Responses carry
   `X-Content-Type-Options: nosniff`, a restrictive `Content-Security-Policy` and
-  `Referrer-Policy: no-referrer`. The HTML page's inline script is authorised by
-  a per-response `nonce`, so no `script-src 'unsafe-inline'` is needed.
+  `Referrer-Policy: no-referrer`. The HTML countdown page's inline script is
+  authorised by a per-response `nonce`; script-free pages use `script-src 'none'`.
 - The working-days headline is computed from the **server's** local date while
   the live clock targets local midnight on the **client**. If the two timezones
   differ the headline and clock can be off by a day; reload to resync.
@@ -162,8 +191,6 @@ Weather data © Open-Meteo (CC BY 4.0). The rendered page footer and API
 python3 -m unittest -v test_christmas_countdown.py
 ```
 
----
-
 # Static Christmas countdown (`index.html`, GitHub Pages)
 
 `index.html` is a dependency-free static Christmas countdown for GitHub Pages:
@@ -171,12 +198,14 @@ no backend, no build step, no network calls.
 
 - Client-side mirror of the Python logic: the target is the next **25 December**
   on or after today; **working days** are Monday-Friday strictly after today, up
-  to and including the target; public holidays are **not** excluded.
+  to and including the target, minus the **Greek public holidays** (fixed dates
+  plus Orthodox Easter computus, verified against the Python implementation).
+  The headline is `remaining_working_days`.
 - Shows the working-days headline (or `Merry Christmas!`), calendar/weekend/full
   weeks facts, and a live clock ticking to local midnight on the target date.
 - Run: `python3 -m http.server 8000`, then open <http://localhost:8000/>.
-- Note: the Python server features (`/api/*`, server-rendered weather) cannot
-  run on Pages; use `christmas_countdown.py` for the full app.
+- Note: the Python server features (`/api/*`, `/calendar`, server-rendered
+  weather) cannot run on Pages; use `christmas_countdown.py` for the full app.
 - Pacman lives in `malme32/pacman-web-app`; it is not part of this repo's Pages
   output.
 

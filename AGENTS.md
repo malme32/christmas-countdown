@@ -6,7 +6,7 @@
 - `test_christmas_countdown.py` — `unittest` suite for `christmas_countdown.py`.
 - `calculator.py` — dependency-free arithmetic calculator (library + CLI).
 - `test_calculator.py` — `unittest` suite for `calculator.py`.
-- `olympiakos_fixtures.py` — Olympiacos next-match fixture reporter (unrelated helper).
+- `olympiakos_fixtures.py` — Olympiacos fixture reporter (unrelated helper).
 - `test_olympiakos_fixtures.py` — tests for the fixture reporter.
 - `README.md` — usage, defined behaviour and acceptance criteria.
 
@@ -63,7 +63,8 @@ python3 christmas_countdown.py --port 8000
   no backend, no build step, no network calls.
 - Client-side mirror of `christmas_countdown.py` logic: next 25 December on or
   after today; working days are Monday-Friday strictly after today up to and
-  including the target; public holidays are not excluded. Live clock ticks to
+  including the target, minus Greek public holidays (fixed + Orthodox Easter
+  computus, verified against the Python implementation). Live clock ticks to
   local midnight on the target date.
 - Serve locally: `python3 -m http.server 8000` then open <http://localhost:8000/>.
 - The Python server (`christmas_countdown.py`,incl. weather) cannot run on Pages.
@@ -71,6 +72,6 @@ python3 christmas_countdown.py --port 8000
 
 ## Definition of done
 
-- Changes are committed on the feature branch.
+- Changes are committed on the feature branch `agent/count-down-to-christmas-f33f48`.
 - `python3 -m unittest -v test_christmas_countdown.py` passes.
 - No third-party dependencies are introduced.
