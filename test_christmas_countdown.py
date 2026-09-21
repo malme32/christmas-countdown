@@ -418,6 +418,86 @@ class FetchWeatherTests(unittest.TestCase):
             christmas_countdown.WEATHER_API_URL = original_url
             christmas_countdown._weather_cache.clear()
 
+    def test_fetch_weather_success_mocked(self) -> None:
+        import christmas_countdown
+        from unittest.mock import patch
+
+        class FakeResponse:
+            def __init__(self, payload: object) -> None:
+                self._body = json.dumps(payload).encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self) -> FakeResponse:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        payload = {
+            "current_weather": {
+                "temperature": 18.0,
+                "windspeed": 8.5,
+                "winddirection": 270,
+                "weathercode": 61,
+            }
+        }
+        try:
+            christmas_countdown._weather_cache.clear()
+            with patch(
+                "christmas_countdown.urllib.request.urlopen",
+                return_value=FakeResponse(payload),
+            ) as mock_urlopen:
+                result = fetch_weather(lat=1.0, lon=2.0)
+                cached = fetch_weather(lat=1.0, lon=2.0)
+            self.assertEqual(
+                result,
+                {
+                    "temperature": 18.0,
+                    "windspeed": 8.5,
+                    "winddirection": 270,
+                    "weathercode": 61,
+                    "description": "Slight rain",
+                    "latitude": 1.0,
+                    "longitude": 2.0,
+                },
+            )
+            # Second call is served from the cache: urlopen runs only once.
+            self.assertEqual(cached, result)
+            self.assertEqual(mock_urlopen.call_count, 1)
+        finally:
+            christmas_countdown._weather_cache.clear()
+
+    def test_fetch_weather_rejects_malformed_payloads(self) -> None:
+        import christmas_countdown
+        from unittest.mock import patch
+
+        class FakeResponse:
+            def __init__(self, payload: object) -> None:
+                self._body = json.dumps(payload).encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self) -> FakeResponse:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        for bad_payload in ({}, {"current_weather": None}, [1, 2, 3]):
+            try:
+                christmas_countdown._weather_cache.clear()
+                with patch(
+                    "christmas_countdown.urllib.request.urlopen",
+                    return_value=FakeResponse(bad_payload),
+                ):
+                    with self.assertRaises(ValueError):
+                        fetch_weather(lat=1.0, lon=2.0)
+            finally:
+                christmas_countdown._weather_cache.clear()
+
 
 class WeatherSummaryTests(unittest.TestCase):
     """Tests for weather summary with error handling."""
@@ -451,6 +531,37 @@ class WeatherSummaryTests(unittest.TestCase):
         finally:
             christmas_countdown.WEATHER_API_URL = original_url
             christmas_countdown._weather_cache.clear()
+
+    def test_weather_summary_malformed_payloads_return_error(self) -> None:
+        import christmas_countdown
+        from unittest.mock import patch
+
+        class FakeResponse:
+            def __init__(self, payload: object) -> None:
+                self._body = json.dumps(payload).encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self) -> FakeResponse:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        for bad_payload in ({}, {"current_weather": None}, [1, 2, 3]):
+            try:
+                christmas_countdown._weather_cache.clear()
+                with patch(
+                    "christmas_countdown.urllib.request.urlopen",
+                    return_value=FakeResponse(bad_payload),
+                ):
+                    result = weather_summary(lat=1.0, lon=2.0)
+                self.assertIn("error", result)
+                self.assertEqual(result["latitude"], 1.0)
+                self.assertEqual(result["longitude"], 2.0)
+            finally:
+                christmas_countdown._weather_cache.clear()
 
     def test_weather_summary_json_serialisable(self) -> None:
         try:

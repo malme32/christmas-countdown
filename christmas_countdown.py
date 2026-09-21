@@ -203,7 +203,8 @@ def fetch_weather(
     Returns a dict with keys: temperature, windspeed, winddirection, weathercode,
     description, latitude, longitude. Uses a thread-safe cache with TTL.
 
-    Raises ``urllib.error.URLError`` or ``OSError`` if the API is unreachable.
+    Raises ``urllib.error.URLError`` or ``OSError`` if the API is unreachable,
+    and ``ValueError`` if the API returns a malformed payload.
     """
     cached = _weather_cache.get(lat, lon)
     if cached is not None:
@@ -219,8 +220,14 @@ def fetch_weather(
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8"))
 
-    current = payload.get("current_weather", {})
-    weather_code = current.get("weathercode", 0)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Unexpected weather payload: {payload!r}")
+    current = payload.get("current_weather")
+    if not isinstance(current, dict):
+        raise ValueError(f"Missing current_weather in payload: {payload!r}")
+    weather_code = current.get("weathercode")
+    if isinstance(weather_code, bool) or not isinstance(weather_code, int):
+        raise ValueError(f"Missing weathercode in payload: {payload!r}")
     result = {
         "temperature": current.get("temperature"),
         "windspeed": current.get("windspeed"),
@@ -242,11 +249,18 @@ def weather_summary(
 ) -> dict:
     """Return weather data with error handling for API failures.
 
-    Returns a dict with either weather data or an error message.
+    Never raises: any fetch or payload error is returned as an ``error`` dict.
     """
     try:
         return fetch_weather(lat, lon, timeout=timeout)
-    except (urllib.error.URLError, OSError, ValueError, KeyError) as exc:
+    except (
+        urllib.error.URLError,
+        OSError,
+        ValueError,
+        KeyError,
+        AttributeError,
+        TypeError,
+    ) as exc:
         return {"error": str(exc), "latitude": lat, "longitude": lon}
 
 
