@@ -1,57 +1,55 @@
-# Pacman web app
+# Christmas working-days countdown
 
-A dependency-free Pacman game built with plain HTML, CSS, JavaScript and the
-Canvas API. There is no build step and no third-party dependency; the core game
-logic is separated from the canvas/input layer so it can be unit tested.
+`christmas_countdown.py` is a dependency-free web app built on the Python
+standard library's `http.server`. It serves a Christmas countdown widget whose
+headline number is the remaining **working days** (Monday-Friday) until
+Christmas Day, alongside calendar days, weekend days and a live clock.
 
-## Run
+## Usage
 
-```sh
-python3 -m http.server 8000
+```bash
+python3 christmas_countdown.py                    # http://127.0.0.1:8000/
+python3 christmas_countdown.py --port 8080        # custom port
+python3 christmas_countdown.py --host 0.0.0.0     # all interfaces
 ```
 
-Then open <http://localhost:8000/>.
+Then open <http://127.0.0.1:8000/> or:
 
-## Controls
+```bash
+curl http://127.0.0.1:8000/                  # HTML widget
+curl http://127.0.0.1:8000/api/countdown     # JSON numbers
+curl http://127.0.0.1:8000/healthz           # health check
+```
 
-- Move: arrow keys or `WASD`
-- Mute: `M` (or the on-screen button)
-- Pause / resume: `P`
-- Start / play again: `Enter` or `Space`
+## Defined behaviour
+
+- The target is the next **25 December** on or after today; on Christmas Day the
+  countdown is zero and the page shows `Merry Christmas!`. After Christmas the
+  target rolls forward to the following year.
+- **Working days** are Monday-Friday strictly after today, up to and including
+  the target. Weekends are excluded; public holidays are **not** excluded, so
+  the count is deterministic and needs no data files or network access.
+- `GET /` returns `200 OK` with the HTML widget.
+- `GET /api/countdown` returns `200 OK` with a JSON object containing `today`,
+  `target`, `calendar_days`, `working_days`, `weekend_days`, `weeks` and
+  `is_christmas`.
+- `GET /healthz` returns `200 OK` with `{"status": "ok"}`.
+- Any other path returns `404 Not Found`; query strings are ignored when routing.
+- `HEAD` is supported for all routes (headers only, no body). Responses carry
+  `X-Content-Type-Options: nosniff`, a restrictive `Content-Security-Policy` and
+  `Referrer-Policy: no-referrer`. The HTML page's inline script is authorised by
+  a per-response `nonce`, so no `script-src 'unsafe-inline'` is needed.
+- The working-days headline is computed from the **server's** local date while
+  the live clock targets local midnight on the **client**. If the two timezones
+  differ the headline and clock can be off by a day; reload to resync.
+- The ready date is computed per request from an injectable clock, so the HTTP
+  handler can be pinned to a fixed date in tests (`create_server(..., today_provider=...)`).
 
 ## Tests
 
-```sh
-node --test test/
-# or
-npm test
+```bash
+python3 -m unittest -v test_christmas_countdown.py
 ```
-
-## Layout
-
-- `index.html` - page shell, HUD and canvas.
-- `styles.css` - presentation only.
-- `src/core/` - pure game logic: `maze.js`, `movement.js`, `player.js`,
-  `ghost.js`, `game.js` (fixed 60 Hz timestep) and `constants.js`.
-- `src/ui/` - `render.js` (canvas), `input.js` (keyboard) and `audio.js`
-  (Web Audio cues synthesised at runtime; pure `cueFor(event)`).
-- `src/main.js` - bootstrap and the `requestAnimationFrame` loop.
-- `test/` - Node unit tests (`node:test`) for the core and pure UI helpers.
-
-## Rules and data model
-
-- 28x31 tile maze with 238 pellets and 4 power pellets (242 in total).
-- One player and four ghosts (Blinky, Pinky, Inky, Clyde) with scatter/chase
-  targeting and a frightened state after a power pellet.
-- Scoring: pellet 10, power pellet 50, frightened ghosts 200/400/800/1600.
-- A life is lost when the player's tile overlaps a non-eaten ghost; three lives
-  start, and losing them all ends the game.
-- Eating every pellet completes the level (5 levels); clearing the final level
-  wins. The tunnel edges wrap horizontally.
-- Movement, collision and ghost AI run on a fixed 60 Hz timestep, decoupled from
-  rendering.
-
----
 
 # Olympiacos next matches
 
