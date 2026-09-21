@@ -407,12 +407,16 @@ class FetchWeatherTests(unittest.TestCase):
 
         original_url = christmas_countdown.WEATHER_API_URL
         try:
+            christmas_countdown._weather_cache.clear()
             christmas_countdown.WEATHER_API_URL = "https://invalid.example.com/weather"
-            with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+            with patch(
+                "christmas_countdown.urllib.request.urlopen", side_effect=mock_urlopen
+            ):
                 with self.assertRaises(urllib.error.URLError):
                     fetch_weather(timeout=1.0)
         finally:
             christmas_countdown.WEATHER_API_URL = original_url
+            christmas_countdown._weather_cache.clear()
 
 
 class WeatherSummaryTests(unittest.TestCase):
@@ -428,16 +432,25 @@ class WeatherSummaryTests(unittest.TestCase):
 
     def test_weather_summary_error_handling(self) -> None:
         import christmas_countdown
+        from unittest.mock import patch
+
+        def mock_urlopen(*args, **kwargs):
+            raise urllib.error.URLError("Connection refused")
 
         original_url = christmas_countdown.WEATHER_API_URL
         try:
+            christmas_countdown._weather_cache.clear()
             christmas_countdown.WEATHER_API_URL = "https://invalid.example.com/weather"
-            result = weather_summary(timeout=1.0)
+            with patch(
+                "christmas_countdown.urllib.request.urlopen", side_effect=mock_urlopen
+            ):
+                result = weather_summary(timeout=1.0)
             self.assertIn("error", result)
             self.assertIn("latitude", result)
             self.assertIn("longitude", result)
         finally:
             christmas_countdown.WEATHER_API_URL = original_url
+            christmas_countdown._weather_cache.clear()
 
     def test_weather_summary_json_serialisable(self) -> None:
         try:
