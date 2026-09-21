@@ -18,6 +18,18 @@
   test as `test_<module>.py`.
 - CLIs use `argparse` and return an `int` exit status from `main()`.
 
+## Christmas countdown weather feature
+
+- Weather lives in `christmas_countdown.py` (single-file, Open-Meteo, no key):
+  `fetch_weather`, `weather_summary`, `translate_weather_code`,
+  `weather_icon_for_code`, `WeatherCache` (bounded, TTL), `_parse_daily_forecast`,
+  `aggregate_weekly`, `aggregate_monthly`, `_render_weather_section`,
+  `_parse_weather_coords`, plus `GET /api/weather` on
+  `ChristmasCountdownHandler` and server-rendered weather in `countdown_page()`.
+- Server-side only: no client-side fetch (CSP `default-src 'none'`); outbound
+  query built with `urllib.parse.urlencode`; coordinates validated
+  (lat -90..90, lon -180..180); attribution `Weather data © Open-Meteo (CC BY 4.0)`.
+
 ## Commands
 
 Run everything:

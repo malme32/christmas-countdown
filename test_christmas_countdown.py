@@ -14,6 +14,8 @@ from http.client import HTTPMessage
 from christmas_countdown import (
     WeatherCache,
     WEATHER_CODES,
+    _parse_weather_coords,
+    _render_weather_section,
     countdown_page,
     countdown_summary,
     create_server,
@@ -21,6 +23,7 @@ from christmas_countdown import (
     is_working_day,
     next_christmas,
     translate_weather_code,
+    weather_icon_for_code,
     weather_summary,
     weekend_days_between,
     working_days_between,
@@ -641,6 +644,258 @@ class WeatherSummaryTests(unittest.TestCase):
             json.dumps(result)
         except (urllib.error.URLError, OSError):
             self.skipTest("Open-Meteo API unreachable")
+
+
+def _fake_weather_payload() -> dict:
+    daily = [
+        {
+            "date": f"2026-12-{day:02d}",
+            "weathercode": 1,
+            "description": "Mainly clear",
+            "temp_max": 20.0,
+            "temp_min": 12.0,
+            "precipitation_sum": 0.0,
+            "precipitation_probability": 10,
+            "windspeed_max": 10.0,
+        }
+        for day in range(1, 9)
+    ]
+    return {
+        "temperature": 18.0,
+        "windspeed": 8.5,
+        "winddirection": 270,
+        "weathercode": 1,
+        "description": "Mainly clear",
+        "latitude": 37.9838,
+        "longitude": 23.7275,
+        "current": {
+            "temperature": 18.0,
+            "windspeed": 8.5,
+            "winddirection": 270,
+            "weathercode": 1,
+            "description": "Mainly clear",
+        },
+        "daily": daily,
+        "weekly": [
+            {
+                "week_start": "2026-12-01",
+                "days": 7,
+                "temp_avg": 16.0,
+                "precipitation_total": 0.0,
+                "weather_dominant": 1,
+                "description": "Mainly clear",
+            },
+            {
+                "week_start": "2026-12-08",
+                "days": 1,
+                "temp_avg": 16.0,
+                "precipitation_total": 0.0,
+                "weather_dominant": 1,
+                "description": "Mainly clear",
+            },
+        ],
+        "monthly": [
+            {
+                "month": "2026-12",
+                "days": 8,
+                "temp_avg": 16.0,
+                "precipitation_total": 0.0,
+                "weather_dominant": 1,
+                "description": "Mainly clear",
+            }
+        ],
+        "source": "open-meteo",
+        "cached_at": "2026-01-01T00:00:00+00:00",
+    }
+
+
+class ParseWeatherCoordsTests(unittest.TestCase):
+    def test_defaults_when_no_query(self) -> None:
+        self.assertEqual(_parse_weather_coords(""), (37.9838, 23.7275))
+
+    def test_valid_overrides(self) -> None:
+        self.assertEqual(_parse_weather_coords("lat=51.5&lon=-0.12"), (51.5, -0.12))
+
+    def test_rejects_non_numeric(self) -> None:
+        self.assertIsNone(_parse_weather_coords("lat=abc&lon=10"))
+
+    def test_rejects_out_of_range(self) -> None:
+        self.assertIsNone(_parse_weather_coords("lat=91&lon=0"))
+        self.assertIsNone(_parse_weather_coords("lat=0&lon=181"))
+        self.assertIsNone(_parse_weather_coords("lat=-91&lon=0"))
+
+    def test_fetch_weather_rejects_out_of_range_directly(self) -> None:
+        with self.assertRaises(ValueError):
+            fetch_weather(lat=91.0, lon=0.0)
+        with self.assertRaises(ValueError):
+            fetch_weather(lat=0.0, lon=200.0)
+
+
+class RenderWeatherSectionTests(unittest.TestCase):
+    def test_full_section_has_all_blocks(self) -> None:
+        html = _render_weather_section(_fake_weather_payload())
+        self.assertIn('class="weather"', html)
+        self.assertIn('class="weather-current"', html)
+        self.assertIn("18.0&deg;C".replace("&deg;", "°") if False else "18.0°C", html)
+        self.assertIn("7-day forecast", html)
+        self.assertEqual(html.count('class="forecast-card"'), 7)
+        self.assertIn("Weekly summary", html)
+        self.assertIn("Monthly summary", html)
+        self.assertIn("CC BY 4.0", html)
+        self.assertIn("open-meteo", html)
+
+    def test_no_client_side_fetch(self) -> None:
+        html = _render_weather_section(_fake_weather_payload())
+        self.assertNotIn("fetch(", html)
+        self.assertNotIn("XMLHttpRequest", html)
+        self.assertNotIn("api.open-meteo.com", html)
+
+    def test_error_and_none_fallback(self) -> None:
+        for bad in (None, {"error": "boom", "latitude": 1.0, "longitude": 2.0}):
+            html = _render_weather_section(bad)  # type: ignore[arg-type]
+            self.assertIn("Weather currently unavailable", html)
+            self.assertNotIn("fetch(", html)
+        # An empty dict is not an error payload: it renders the section
+        # skeleton with per-block fallbacks rather than crashing.
+        html = _render_weather_section({})
+        self.assertIn("Athens weather", html)
+        self.assertIn("Forecast currently unavailable", html)
+
+    def test_escaping(self) -> None:
+        payload = _fake_weather_payload()
+        payload["current"]["description"] = '<script>alert("x")</script>'  # type: ignore[index]
+        html = _render_weather_section(payload)
+        self.assertNotIn('<script>alert("x")</script>', html)
+        self.assertIn("&lt;script&gt;", html)
+
+    def test_page_embeds_weather_below_facts(self) -> None:
+        page = countdown_page(countdown_summary(date(2026, 12, 1)), weather=_fake_weather_payload())
+        self.assertGreater(page.find('class="weather"'), page.find('class="facts"'))
+        self.assertIn("CC BY 4.0", page)
+        self.assertNotIn("fetch(", page)
+
+    def test_weather_icon_helper(self) -> None:
+        self.assertEqual(weather_icon_for_code(0), "\u2600\ufe0f")
+        self.assertEqual(weather_icon_for_code(999), "\u2753")
+        self.assertEqual(weather_icon_for_code(None), "\u2753")
+
+
+class WeatherApiRouteTests(unittest.TestCase):
+    """Route-level tests for /api/weather with a mocked upstream."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import christmas_countdown
+
+        cls._mod = christmas_countdown
+        cls._mod._weather_cache.clear()
+
+        class FakeResponse:
+            def __init__(self, payload: object) -> None:
+                self._body = json.dumps(payload).encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self) -> FakeResponse:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        cls._payload = {
+            "current_weather": {
+                "temperature": 18.0,
+                "windspeed": 8.5,
+                "winddirection": 270,
+                "weathercode": 1,
+            },
+            "daily": {
+                "time": ["2026-12-01", "2026-12-02"],
+                "weathercode": [1, 1],
+                "temperature_2m_max": [20.0, 21.0],
+                "temperature_2m_min": [12.0, 13.0],
+                "precipitation_sum": [0.0, 0.0],
+                "precipitation_probability_max": [10, 5],
+                "windspeed_10m_max": [10.0, 9.0],
+            },
+        }
+
+        from unittest.mock import patch
+
+        real_urlopen = urllib.request.urlopen
+        cls._upstream_calls: list[str] = []
+
+        def _fake_urlopen(request, timeout=5, *args, **kwargs):
+            url = request.full_url if isinstance(request, urllib.request.Request) else str(request)
+            if "open-meteo" in url or "invalid.example.com" in url:
+                cls._upstream_calls.append(url)
+                return FakeResponse(cls._payload)
+            return real_urlopen(request, timeout=timeout, *args, **kwargs)
+
+        cls._patcher = patch(
+            "christmas_countdown.urllib.request.urlopen",
+            side_effect=_fake_urlopen,
+        )
+        cls._mock = cls._patcher.start()
+        cls.server = create_server("127.0.0.1", 0, today_provider=lambda: FIXED_TODAY)
+        cls.host, cls.port = cls.server.server_address[:2]
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=5)
+        cls._patcher.stop()
+        cls._mod._weather_cache.clear()
+
+    def _request(self, path: str, method: str = "GET") -> tuple[int, HTTPMessage, str]:
+        request = urllib.request.Request(
+            f"http://{self.host}:{self.port}{path}", method=method
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, response.headers, response.read().decode("utf-8")
+        except urllib.error.HTTPError as error:
+            return error.code, error.headers, error.read().decode("utf-8")
+
+    def test_weather_endpoint_returns_full_shape(self) -> None:
+        status, headers, body = self._request("/api/weather")
+        self.assertEqual(status, 200)
+        self.assertIn("application/json", headers.get("Content-Type", ""))
+        payload = json.loads(body)
+        for key in ("current", "daily", "weekly", "monthly", "source", "cached_at"):
+            self.assertIn(key, payload)
+
+    def test_weather_endpoint_rejects_bad_coords(self) -> None:
+        status, _, body = self._request("/api/weather?lat=999&lon=0")
+        self.assertEqual(status, 400)
+        self.assertIn("Invalid coordinates", json.loads(body)["error"])
+
+    def test_weather_endpoint_head_and_security_headers(self) -> None:
+        status, headers, body = self._request("/api/weather", method="HEAD")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, "")
+        self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
+        csp = headers.get("Content-Security-Policy", "")
+        self.assertIn("default-src 'none'", csp)
+        self.assertIn("script-src 'none'", csp)
+
+    def test_weather_endpoint_cache_hit(self) -> None:
+        self._mod._weather_cache.clear()
+        self._upstream_calls.clear()
+        self._request("/api/weather?lat=10&lon=20")
+        self._request("/api/weather?lat=10&lon=20")
+        self.assertEqual(len(self._upstream_calls), 1)
+
+    def test_root_embeds_server_side_weather(self) -> None:
+        status, _, body = self._request("/")
+        self.assertEqual(status, 200)
+        self.assertIn('class="weather"', body)
+        self.assertIn("CC BY 4.0", body)
+        self.assertNotIn("fetch(", body)
 
 
 if __name__ == "__main__":

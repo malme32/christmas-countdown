@@ -153,12 +153,15 @@ class WeatherCache:
 
     Stores weather data keyed by (latitude, longitude) with a configurable
     time-to-live. The lock ensures safe concurrent access from multiple
-    threads.
+    threads. The cache is bounded to ``max_entries`` (oldest-timestamp
+    eviction) so an attacker cycling ``?lat=``/``?lon=`` cannot grow it
+    without bound; TTL expiry still removes stale entries on read.
     """
 
-    def __init__(self, ttl: int = WEATHER_CACHE_TTL) -> None:
+    def __init__(self, ttl: int = WEATHER_CACHE_TTL, max_entries: int = 128) -> None:
         self._cache: dict[tuple[float, float], tuple[float, dict]] = {}
         self._ttl = ttl
+        self._max_entries = max_entries
         self._lock = threading.Lock()
 
     def get(self, lat: float, lon: float) -> dict | None:
@@ -177,6 +180,9 @@ class WeatherCache:
         key = (lat, lon)
         with self._lock:
             self._cache[key] = (time.time(), data)
+            if len(self._cache) > self._max_entries:
+                oldest = min(self._cache.items(), key=lambda kv: kv[1][0])[0]
+                del self._cache[oldest]
 
     def clear(self) -> None:
         """Remove all cached entries."""
@@ -398,21 +404,27 @@ def fetch_weather(
     cache with TTL.
 
     Raises ``urllib.error.URLError`` or ``OSError`` if the API is unreachable,
-    and ``ValueError`` if the API returns a malformed payload.
+    and ``ValueError`` if the API returns a malformed payload or the
+    coordinates are out of range (latitude -90..90, longitude -180..180).
     """
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ValueError(f"Invalid coordinates: lat={lat!r} lon={lon!r}")
     cached = _weather_cache.get(lat, lon)
     if cached is not None:
         return cached
 
-    params = (
-        f"?latitude={lat}&longitude={lon}"
-        "&current_weather=true"
-        "&daily=weathercode,temperature_2m_max,temperature_2m_min,"
-        "precipitation_sum,precipitation_probability_max,windspeed_10m_max"
-        f"&forecast_days={WEATHER_FORECAST_DAYS}"
-        "&timezone=auto"
+    query = urllib.parse.urlencode(
+        {
+            "latitude": lat,
+            "longitude": lon,
+            "current_weather": "true",
+            "daily": "weathercode,temperature_2m_max,temperature_2m_min,"
+            "precipitation_sum,precipitation_probability_max,windspeed_10m_max",
+            "forecast_days": WEATHER_FORECAST_DAYS,
+            "timezone": "auto",
+        }
     )
-    url = WEATHER_API_URL + params
+    url = WEATHER_API_URL + "?" + query
     request = urllib.request.Request(url, headers={"User-Agent": "christmas-countdown/1.0"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8"))
@@ -616,7 +628,9 @@ def _render_weather_section(weather: dict | None) -> str:
 
     source = weather.get("source")
     if isinstance(source, str) and source:
-        parts.append(f'        <p class="weather-source">Source: {escape(source)}</p>\n')
+        parts.append(
+            f'        <p class="weather-source">Weather data &copy; {escape(source)} (CC BY 4.0)</p>\n'
+        )
     parts.append("      </section>\n")
     return "".join(parts)
 

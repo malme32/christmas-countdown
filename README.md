@@ -16,8 +16,10 @@ python3 christmas_countdown.py --host 0.0.0.0     # all interfaces
 Then open <http://127.0.0.1:8000/> or:
 
 ```bash
-curl http://127.0.0.1:8000/                  # HTML widget
+curl http://127.0.0.1:8000/                  # HTML widget (includes server-rendered weather)
 curl http://127.0.0.1:8000/api/countdown     # JSON numbers
+curl http://127.0.0.1:8000/api/weather       # JSON weather (current/daily/weekly/monthly)
+curl "http://127.0.0.1:8000/api/weather?lat=51.5&lon=-0.12"  # custom location
 curl http://127.0.0.1:8000/healthz           # health check
 ```
 
@@ -33,11 +35,22 @@ curl http://127.0.0.1:8000/healthz           # health check
 - `GET /api/countdown` returns `200 OK` with a JSON object containing `today`,
   `target`, `calendar_days`, `working_days`, `weekend_days`, `weeks` and
   `is_christmas`.
-- `GET /api/weather` returns `200 OK` with a JSON object containing current
-  weather data (temperature, windspeed, winddirection, weathercode, description,
-  latitude, longitude) or an error object if the weather API is unreachable.
+- `GET /api/weather` returns `200 OK` with a JSON object containing `current`
+  (temperature, windspeed, winddirection, weathercode, description),
+  `daily` per-day entries, `weekly` 7-day aggregates, `monthly` per-month
+  aggregates, plus `latitude`, `longitude`, `source` and `cached_at`.
+  Optional `?lat=-90..90&lon=-180..180` overrides the default (Athens
+  37.9838, 23.7275); invalid values return `400` with an `error` object.
+  When the upstream Open-Meteo API is unreachable or returns a malformed
+  payload, the endpoint returns `200 OK` with an `error` object (never a 5xx).
+- `GET /` embeds the same weather data as static server-rendered HTML below
+  the countdown facts (current conditions, 7-day cards, weekly/monthly
+  summaries). No client-side fetch is emitted, so the page works under the
+  restrictive CSP. When weather is unavailable the section shows a fallback
+  message. Weather data © Open-Meteo (CC BY 4.0).
 - `GET /healthz` returns `200 OK` with `{"status": "ok"}`.
-- Any other path returns `404 Not Found`; query strings are ignored when routing.
+- Any other path returns `404 Not Found`; query strings do not affect routing
+  except `/api/weather`, which honours `?lat=`/`?lon=`.
 - `HEAD` is supported for all routes (headers only, no body). Responses carry
   `X-Content-Type-Options: nosniff`, a restrictive `Content-Security-Policy` and
   `Referrer-Policy: no-referrer`. The HTML page's inline script is authorised by
