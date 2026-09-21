@@ -22,10 +22,15 @@
 
 - Weather lives in `christmas_countdown.py` (single-file, Open-Meteo, no key):
   `fetch_weather`, `weather_summary`, `translate_weather_code`,
-  `weather_icon_for_code`, `WeatherCache` (bounded, TTL), `_parse_daily_forecast`,
-  `aggregate_weekly`, `aggregate_monthly`, `_render_weather_section`,
+  `weather_icon_for_code`, `datetime_now_utc_iso`, `WeatherCache` (bounded to
+  128 entries, TTL), `_parse_daily_forecast`, `_dominant_weather_code`,
+  `aggregate_weekly`, `aggregate_monthly`, `_render_weather_section`
+  (with `_fmt_temp_celsius` / `_fmt_wind` / `_fmt_precip` helpers),
   `_parse_weather_coords`, plus `GET /api/weather` on
   `ChristmasCountdownHandler` and server-rendered weather in `countdown_page()`.
+- Constants: `WEATHER_API_URL`, `WEATHER_CACHE_TTL`, `WEATHER_DEFAULT_LAT`,
+  `WEATHER_DEFAULT_LON`, `WEATHER_FORECAST_DAYS`, `WEATHER_SOURCE`,
+  `WEATHER_CODES`, `WEATHER_ICONS`, `WEATHER_ICON_FALLBACK`.
 - Server-side only: no client-side fetch (CSP `default-src 'none'`); outbound
   query built with `urllib.parse.urlencode`; coordinates validated
   (lat -90..90, lon -180..180); attribution `Weather data © Open-Meteo (CC BY 4.0)`.

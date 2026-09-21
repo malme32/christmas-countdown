@@ -23,6 +23,66 @@ curl "http://127.0.0.1:8000/api/weather?lat=51.5&lon=-0.12"  # custom location
 curl http://127.0.0.1:8000/healthz           # health check
 ```
 
+## Weather feature
+
+The countdown page includes a **server-rendered weather section** showing the
+current conditions plus a daily, weekly and monthly forecast for the default
+location (Athens, Greece: 37.9838, 23.7275). Data comes from the
+[Open-Meteo](https://open-meteo.com/) forecast API (no API key needed) and is
+cached in memory per `(latitude, longitude)` with a 10-minute TTL
+(`WeatherCache`: thread-safe, bounded to 128 entries with oldest-timestamp
+eviction). Rendering is server-side only — the page emits no client-side
+`fetch()`, so it works under the restrictive CSP (`default-src 'none'`).
+
+### Configuration
+
+There are no weather-specific environment variables or CLI flags. The server
+CLI only exposes `--host` and `--port`. Weather is configured two ways:
+
+- **Per request:** `GET /api/weather?lat=<lat>&lon=<lon>` overrides the
+  location. Latitude must be -90..90, longitude -180..180; anything else
+  (non-numeric, missing pairing, out of range) returns `400` with an `error`
+  object.
+- **In code:** override the module-level constants in `christmas_countdown.py`
+  before calling `fetch_weather()` / `weather_summary()`:
+
+| Constant | Default | Description |
+|---|---|---|
+| `WEATHER_API_URL` | `https://api.open-meteo.com/v1/forecast` | Open-Meteo API base URL |
+| `WEATHER_CACHE_TTL` | `600` (seconds) | How long cached weather data stays valid |
+| `WEATHER_DEFAULT_LAT` | `37.9838` (Athens) | Default latitude |
+| `WEATHER_DEFAULT_LON` | `23.7275` (Athens) | Default longitude |
+| `WEATHER_FORECAST_DAYS` | `16` | Daily forecast days requested (Open-Meteo max) |
+
+### API: `GET /api/weather`
+
+Returns `200 OK` with current conditions, a `current` alias of those
+conditions, a `daily` per-day forecast (16 days max), `weekly` 7-day-chunk
+aggregates and `monthly` per-`YYYY-MM` aggregates, plus `latitude`,
+`longitude`, `source` and `cached_at` (UTC ISO-8601).
+
+Daily entries carry `date`, `weathercode`, `description`, `temp_max`,
+`temp_min`, `precipitation_sum`, `precipitation_probability` and
+`windspeed_max`. Weekly/monthly summaries carry `days`, `temp_avg`,
+`precipitation_total`, the dominant `weather_dominant` code and its
+`description` (plus `week_start` / `month`).
+
+When the upstream Open-Meteo API is unreachable or returns a malformed
+payload, the endpoint returns `200 OK` with an `error` object
+(`{"error": ..., "latitude": ..., "longitude": ...}`) — never a 5xx.
+Invalid `?lat=`/`?lon=` values return `400` with an `error` object.
+
+Weather codes follow the
+[WMO Weather interpretation codes](https://open-meteo.com/en/docs) standard
+(`translate_weather_code()`; unknown codes map to `"Unknown"`), rendered with
+Unicode icons (`weather_icon_for_code()`).
+
+### Attribution
+
+Weather data © Open-Meteo (CC BY 4.0). The rendered page footer and API
+`source` field credit `open-meteo`; see <https://open-meteo.com/> and
+<https://creativecommons.org/licenses/by/4.0/>.
+
 ## Defined behaviour
 
 - The target is the next **25 December** on or after today; on Christmas Day the
