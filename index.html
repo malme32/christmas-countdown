@@ -1,30 +1,145 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Pacman</title>
-    <meta name="description" content="A dependency-free Pacman game built with HTML, CSS, JavaScript and Canvas." />
-    <link rel="stylesheet" href="styles.css" />
-  </head>
-  <body>
-    <main class="app">
-      <h1 class="visually-hidden">Pacman</h1>
-      <section class="hud" aria-label="Game status">
-        <div>SCORE<span id="score">000000</span></div>
-        <div>HIGH<span id="high-score">000000</span></div>
-        <div>LIVES<span id="lives">3</span></div>
-        <div>LEVEL<span id="level">1</span></div>
-      </section>
-      <div class="board-wrap">
-        <canvas id="board" width="672" height="744" aria-label="Pacman maze"></canvas>
-        <p id="overlay" hidden>READY!</p>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Static Christmas working-days countdown widget. No backend, no build step.">
+  <title>Christmas Countdown</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center;
+      justify-content: center; font-family: system-ui, -apple-system,
+      "Segoe UI", Roboto, sans-serif; color: #f5fbf7;
+      background: radial-gradient(circle at 50% 0%, #0b3d2e, #071c15 70%);
+    }
+    main { text-align: center; padding: 2rem; }
+    .card {
+      background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1);
+      border-radius: 1.25rem; padding: 2.5rem 3rem; box-shadow: 0 20px 60px rgba(0,0,0,.35);
+      max-width: 34rem;
+    }
+    h1 {
+      margin: 0; font-size: 1.4rem; font-weight: 600; letter-spacing: .12em;
+      text-transform: uppercase; color: #b7f0d0;
+    }
+    .working {
+      font-size: clamp(4rem, 18vw, 11rem); font-weight: 800; line-height: 1;
+      color: #e8443a; text-shadow: 0 0 40px rgba(232,68,58,.45); margin: 1rem 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .caption { margin: 0; font-size: 1.05rem; color: #cfe9d8; }
+    .facts { display: flex; gap: 1.25rem; justify-content: center; margin-top: 2rem; flex-wrap: wrap; }
+    .fact {
+      background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1);
+      border-radius: .75rem; padding: .85rem 1.1rem; min-width: 7rem;
+    }
+    .fact b { display: block; font-size: 1.4rem; color: #fff; font-variant-numeric: tabular-nums; }
+    .fact span { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: #9fc9b0; }
+    .clock { margin-top: 2rem; font-variant-numeric: tabular-nums; font-size: 1.1rem; color: #b7f0d0; min-height: 1.6em; }
+    .note { margin: 1.5rem 0 0; font-size: .8rem; color: #9fc9b0; }
+    @media (max-width: 700px) {
+      main { padding: 1rem; }
+      .card { padding: 1.5rem 1.25rem; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card">
+      <h1>Christmas Countdown</h1>
+      <div class="working" id="working">…</div>
+      <p class="caption" id="caption">Loading…</p>
+      <div class="facts">
+        <div class="fact"><b id="calendar">–</b><span>calendar days</span></div>
+        <div class="fact"><b id="weekend">–</b><span>weekend days</span></div>
+        <div class="fact"><b id="weeks">–</b><span>full weeks</span></div>
       </div>
-      <section class="controls" aria-label="Controls">
-        <button type="button" id="mute">Sound on (M)</button>
-        <span>Move: Arrow keys / WASD &middot; Pause: P &middot; Restart: Enter</span>
-      </section>
-    </main>
-    <script type="module" src="src/main.js"></script>
-  </body>
+      <p class="clock" id="clock">Loading clock…</p>
+      <p class="note">Static page for GitHub Pages: working days are Monday–Friday
+      (public holidays not excluded). No backend, no network calls.</p>
+    </div>
+  </main>
+  <script>
+    // Mirror of christmas_countdown.py: next Christmas on/after today;
+    // working days are Mon-Fri strictly after today up to and including target.
+    function startOfDay(d) {
+      return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    }
+    function nextChristmas(today) {
+      var y = today.getFullYear();
+      var target = new Date(y, 11, 25);
+      if (today > target) {
+        target = new Date(y + 1, 11, 25);
+      }
+      return target;
+    }
+    function isWorkingDay(day) {
+      var dow = day.getDay(); // 0=Sun..6=Sat
+      return dow >= 1 && dow <= 5;
+    }
+    function targetLabel(target) {
+      var weekday = target.toLocaleDateString("en-GB", { weekday: "long" });
+      var monthYear = target.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+      return weekday + ", " + target.getDate() + " " + monthYear;
+    }
+    function render() {
+      var now = new Date();
+      var today = startOfDay(now);
+      var target = nextChristmas(today);
+      // Calendar-day diff via UTC to stay DST-safe.
+      var calendarDays = Math.round(
+        (Date.UTC(target.getFullYear(), target.getMonth(), target.getDate()) -
+          Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 86400000
+      );
+      var workingDays = 0;
+      var weekendDays = 0;
+      // Iterate calendar days (not 24h steps) to survive DST transitions.
+      for (var i = 1; i <= calendarDays; i++) {
+        var day = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i);
+        if (isWorkingDay(day)) { workingDays++; } else { weekendDays++; }
+      }
+      var isChristmas = today.getTime() === target.getTime();
+      var workingEl = document.getElementById("working");
+      var captionEl = document.getElementById("caption");
+      if (isChristmas) {
+        workingEl.textContent = "Merry Christmas!";
+        workingEl.style.fontSize = "clamp(2rem, 8vw, 4rem)";
+        captionEl.textContent = "Christmas Day \u2013 " + targetLabel(target);
+      } else {
+        workingEl.textContent = String(workingDays);
+        var noun = workingDays === 1 ? "working day" : "working days";
+        captionEl.textContent = noun + " until Christmas Day \u2013 " + targetLabel(target);
+      }
+      document.getElementById("calendar").textContent = String(calendarDays);
+      document.getElementById("weekend").textContent = String(weekendDays);
+      document.getElementById("weeks").textContent = String(Math.floor(calendarDays / 7));
+      return target;
+    }
+    var target = render();
+    var clockEl = document.getElementById("clock");
+    function pad(n) { return String(n).padStart(2, "0"); }
+    function tick() {
+      var remaining = target - new Date();
+      if (remaining <= 0) {
+        // Roll forward if we just passed midnight into Christmas Day.
+        target = render();
+        remaining = target - new Date();
+        if (remaining <= 0) { clockEl.textContent = "Merry Christmas!"; return; }
+      }
+      var total = Math.floor(remaining / 1000);
+      var days = Math.floor(total / 86400);
+      var hours = Math.floor((total % 86400) / 3600);
+      var minutes = Math.floor((total % 3600) / 60);
+      var seconds = total % 60;
+      clockEl.textContent = days + "d " + pad(hours) + "h " + pad(minutes) + "m " + pad(seconds) + "s of calendar time remaining";
+      setTimeout(tick, 1000);
+    }
+    tick();
+  </script>
+</body>
 </html>

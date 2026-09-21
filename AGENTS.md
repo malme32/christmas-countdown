@@ -57,14 +57,17 @@ python3 -m unittest -v test_christmas_countdown.py
 python3 christmas_countdown.py --port 8000
 ```
 
-## Pacman web app
+## Static Pages countdown (`index.html`)
 
-The Pacman game is plain ES-module HTML/CSS/JS + Canvas with no build step.
-
-- Source: `index.html`, `styles.css`, `src/core/`, `src/ui/`, `src/main.js`.
-- Tests: `test/` using Node's built-in `node:test` runner (Node >= 18).
-- Run locally: `python3 -m http.server 8000` then open <http://localhost:8000/>.
-- Run tests: `node --test test/` (or `npm test`).
+- `index.html` is a dependency-free static Christmas countdown for GitHub Pages:
+  no backend, no build step, no network calls.
+- Client-side mirror of `christmas_countdown.py` logic: next 25 December on or
+  after today; working days are Monday-Friday strictly after today up to and
+  including the target; public holidays are not excluded. Live clock ticks to
+  local midnight on the target date.
+- Serve locally: `python3 -m http.server 8000` then open <http://localhost:8000/>.
+- The Python server (`christmas_countdown.py`,incl. weather) cannot run on Pages.
+- Pacman lives in `malme32/pacman-web-app`; do not add it here.
 
 ## Definition of done
 
