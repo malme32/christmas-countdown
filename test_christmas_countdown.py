@@ -441,8 +441,49 @@ class FetchWeatherTests(unittest.TestCase):
                 "windspeed": 8.5,
                 "winddirection": 270,
                 "weathercode": 61,
-            }
+            },
+            "daily": {
+                "time": ["2026-09-21", "2026-09-22", "2026-09-23"],
+                "weathercode": [61, 1, 1],
+                "temperature_2m_max": [20.0, 22.0, 23.0],
+                "temperature_2m_min": [12.0, 13.0, 14.0],
+                "precipitation_sum": [2.5, 0.0, 0.0],
+                "precipitation_probability_max": [80, 10, 5],
+                "windspeed_10m_max": [15.0, 10.0, 8.0],
+            },
         }
+        expected_daily = [
+            {
+                "date": "2026-09-21",
+                "weathercode": 61,
+                "description": "Slight rain",
+                "temp_max": 20.0,
+                "temp_min": 12.0,
+                "precipitation_sum": 2.5,
+                "precipitation_probability": 80,
+                "windspeed_max": 15.0,
+            },
+            {
+                "date": "2026-09-22",
+                "weathercode": 1,
+                "description": "Mainly clear",
+                "temp_max": 22.0,
+                "temp_min": 13.0,
+                "precipitation_sum": 0.0,
+                "precipitation_probability": 10,
+                "windspeed_max": 10.0,
+            },
+            {
+                "date": "2026-09-23",
+                "weathercode": 1,
+                "description": "Mainly clear",
+                "temp_max": 23.0,
+                "temp_min": 14.0,
+                "precipitation_sum": 0.0,
+                "precipitation_probability": 5,
+                "windspeed_max": 8.0,
+            },
+        ]
         try:
             christmas_countdown._weather_cache.clear()
             with patch(
@@ -451,6 +492,8 @@ class FetchWeatherTests(unittest.TestCase):
             ) as mock_urlopen:
                 result = fetch_weather(lat=1.0, lon=2.0)
                 cached = fetch_weather(lat=1.0, lon=2.0)
+            cached_at = result.pop("cached_at")
+            self.assertIsInstance(cached_at, str)
             self.assertEqual(
                 result,
                 {
@@ -461,6 +504,35 @@ class FetchWeatherTests(unittest.TestCase):
                     "description": "Slight rain",
                     "latitude": 1.0,
                     "longitude": 2.0,
+                    "current": {
+                        "temperature": 18.0,
+                        "windspeed": 8.5,
+                        "winddirection": 270,
+                        "weathercode": 61,
+                        "description": "Slight rain",
+                    },
+                    "daily": expected_daily,
+                    "weekly": [
+                        {
+                            "week_start": "2026-09-21",
+                            "days": 3,
+                            "temp_avg": 17.3,
+                            "precipitation_total": 2.5,
+                            "weather_dominant": 1,
+                            "description": "Mainly clear",
+                        }
+                    ],
+                    "monthly": [
+                        {
+                            "month": "2026-09",
+                            "days": 3,
+                            "temp_avg": 17.3,
+                            "precipitation_total": 2.5,
+                            "weather_dominant": 1,
+                            "description": "Mainly clear",
+                        }
+                    ],
+                    "source": "open-meteo",
                 },
             )
             # Second call is served from the cache: urlopen runs only once.

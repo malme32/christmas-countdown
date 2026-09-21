@@ -23,9 +23,10 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
@@ -41,6 +42,8 @@ WEATHER_API_URL = "https://api.open-meteo.com/v1/forecast"
 WEATHER_CACHE_TTL = 600  # 10 minutes in seconds
 WEATHER_DEFAULT_LAT = 37.9838  # Athens, Greece
 WEATHER_DEFAULT_LON = 23.7275
+WEATHER_FORECAST_DAYS = 16  # Open-Meteo serves at most 16 daily forecast days
+WEATHER_SOURCE = "open-meteo"
 
 # WMO Weather interpretation codes (https://open-meteo.com/en/docs)
 WEATHER_CODES: dict[int, str] = {
@@ -193,15 +196,158 @@ def translate_weather_code(code: int) -> str:
     return WEATHER_CODES.get(code, "Unknown")
 
 
+def datetime_now_utc_iso() -> str:
+    """Return the current UTC time as an ISO-8601 string for payload metadata."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _dominant_weather_code(codes: list[int]) -> int | None:
+    """Return the most frequent weather code (mode); ties go to the first seen."""
+    if not codes:
+        return None
+    counts: dict[int, int] = {}
+    for code in codes:
+        counts[code] = counts.get(code, 0) + 1
+    top = max(counts.values())
+    for code in codes:
+        if counts[code] == top:
+            return code
+    return codes[0]
+
+
+def _parse_daily_forecast(payload_daily: object) -> list[dict]:
+    """Normalise the Open-Meteo ``daily`` block into a list of per-day dicts.
+
+    Returns an empty list when the block is missing or malformed, so callers
+    still get current conditions even if the forecast section is unusable.
+    """
+    if not isinstance(payload_daily, dict):
+        return []
+    times = payload_daily.get("time")
+    if not isinstance(times, list) or not times:
+        return []
+
+    def column(name: str) -> list:
+        values = payload_daily.get(name)
+        return list(values) if isinstance(values, list) else []
+
+    codes = column("weathercode")
+    temp_max = column("temperature_2m_max")
+    temp_min = column("temperature_2m_min")
+    precip_sum = column("precipitation_sum")
+    precip_prob = column("precipitation_probability_max")
+    wind_max = column("windspeed_10m_max")
+
+    daily: list[dict] = []
+    for i, day in enumerate(times):
+        if not isinstance(day, str):
+            continue
+        code = codes[i] if i < len(codes) and isinstance(codes[i], int) else None
+        entry: dict = {"date": day}
+        entry["weathercode"] = code
+        entry["description"] = translate_weather_code(code) if code is not None else "Unknown"
+        entry["temp_max"] = temp_max[i] if i < len(temp_max) else None
+        entry["temp_min"] = temp_min[i] if i < len(temp_min) else None
+        entry["precipitation_sum"] = precip_sum[i] if i < len(precip_sum) else None
+        entry["precipitation_probability"] = precip_prob[i] if i < len(precip_prob) else None
+        entry["windspeed_max"] = wind_max[i] if i < len(wind_max) else None
+        daily.append(entry)
+    return daily
+
+
+def aggregate_weekly(daily: list[dict]) -> list[dict]:
+    """Aggregate daily entries into 7-day week summaries.
+
+    Each summary has ``week_start``, ``days``, ``temp_avg`` (mean of the daily
+    mid-temperatures), ``precipitation_total`` and the dominant weather code
+    with its human-readable ``description``.
+    """
+    weeks: list[dict] = []
+    for start in range(0, len(daily), 7):
+        chunk = daily[start : start + 7]
+        mids = [
+            (day["temp_max"] + day["temp_min"]) / 2
+            for day in chunk
+            if isinstance(day.get("temp_max"), (int, float))
+            and isinstance(day.get("temp_min"), (int, float))
+        ]
+        precip = sum(
+            day["precipitation_sum"]
+            for day in chunk
+            if isinstance(day.get("precipitation_sum"), (int, float))
+        )
+        codes = [day["weathercode"] for day in chunk if isinstance(day.get("weathercode"), int)]
+        dominant = _dominant_weather_code(codes)
+        weeks.append(
+            {
+                "week_start": chunk[0].get("date"),
+                "days": len(chunk),
+                "temp_avg": round(sum(mids) / len(mids), 1) if mids else None,
+                "precipitation_total": round(precip, 1),
+                "weather_dominant": dominant,
+                "description": translate_weather_code(dominant)
+                if dominant is not None
+                else "Unknown",
+            }
+        )
+    return weeks
+
+
+def aggregate_monthly(daily: list[dict]) -> list[dict]:
+    """Aggregate daily entries by calendar month (``YYYY-MM``).
+
+    Each summary has ``month``, ``days``, ``temp_avg``, ``precipitation_total``
+    and the dominant weather code with its ``description``.
+    """
+    buckets: dict[str, list[dict]] = {}
+    for day in daily:
+        raw_date = day.get("date")
+        month = raw_date[:7] if isinstance(raw_date, str) and len(raw_date) >= 7 else "unknown"
+        buckets.setdefault(month, []).append(day)
+    months: list[dict] = []
+    for month in sorted(buckets):
+        chunk = buckets[month]
+        mids = [
+            (day["temp_max"] + day["temp_min"]) / 2
+            for day in chunk
+            if isinstance(day.get("temp_max"), (int, float))
+            and isinstance(day.get("temp_min"), (int, float))
+        ]
+        precip = sum(
+            day["precipitation_sum"]
+            for day in chunk
+            if isinstance(day.get("precipitation_sum"), (int, float))
+        )
+        codes = [day["weathercode"] for day in chunk if isinstance(day.get("weathercode"), int)]
+        dominant = _dominant_weather_code(codes)
+        months.append(
+            {
+                "month": month,
+                "days": len(chunk),
+                "temp_avg": round(sum(mids) / len(mids), 1) if mids else None,
+                "precipitation_total": round(precip, 1),
+                "weather_dominant": dominant,
+                "description": translate_weather_code(dominant)
+                if dominant is not None
+                else "Unknown",
+            }
+        )
+    return months
+
+
 def fetch_weather(
     lat: float = WEATHER_DEFAULT_LAT,
     lon: float = WEATHER_DEFAULT_LON,
     timeout: float = 10.0,
 ) -> dict:
-    """Fetch current weather from Open-Meteo API.
+    """Fetch current weather plus daily forecast from Open-Meteo API.
 
-    Returns a dict with keys: temperature, windspeed, winddirection, weathercode,
-    description, latitude, longitude. Uses a thread-safe cache with TTL.
+    Returns a dict with the current conditions (``temperature``, ``windspeed``,
+    ``winddirection``, ``weathercode``, ``description``, ``latitude``,
+    ``longitude``), a ``current`` alias of those conditions, ``daily`` (per-day
+    forecast entries), ``weekly``/``monthly`` aggregates derived from the daily
+    entries, plus ``source`` and ``cached_at`` metadata. Uses a thread-safe
+    cache with TTL.
 
     Raises ``urllib.error.URLError`` or ``OSError`` if the API is unreachable,
     and ``ValueError`` if the API returns a malformed payload.
@@ -213,6 +359,9 @@ def fetch_weather(
     params = (
         f"?latitude={lat}&longitude={lon}"
         "&current_weather=true"
+        "&daily=weathercode,temperature_2m_max,temperature_2m_min,"
+        "precipitation_sum,precipitation_probability_max,windspeed_10m_max"
+        f"&forecast_days={WEATHER_FORECAST_DAYS}"
         "&timezone=auto"
     )
     url = WEATHER_API_URL + params
@@ -228,6 +377,7 @@ def fetch_weather(
     weather_code = current.get("weathercode")
     if isinstance(weather_code, bool) or not isinstance(weather_code, int):
         raise ValueError(f"Missing weathercode in payload: {payload!r}")
+    daily = _parse_daily_forecast(payload.get("daily"))
     result = {
         "temperature": current.get("temperature"),
         "windspeed": current.get("windspeed"),
@@ -236,6 +386,18 @@ def fetch_weather(
         "description": translate_weather_code(weather_code),
         "latitude": lat,
         "longitude": lon,
+        "current": {
+            "temperature": current.get("temperature"),
+            "windspeed": current.get("windspeed"),
+            "winddirection": current.get("winddirection"),
+            "weathercode": weather_code,
+            "description": translate_weather_code(weather_code),
+        },
+        "daily": daily,
+        "weekly": aggregate_weekly(daily),
+        "monthly": aggregate_monthly(daily),
+        "source": WEATHER_SOURCE,
+        "cached_at": datetime_now_utc_iso(),
     }
 
     _weather_cache.set(lat, lon, result)
@@ -382,6 +544,25 @@ def _content_security_policy(nonce: str | None = None) -> str:
     )
 
 
+def _parse_weather_coords(query: str) -> tuple[float, float] | None:
+    """Parse ``?lat=..&lon=..`` overrides, falling back to the defaults.
+
+    Returns ``None`` when a supplied value is not a finite number or is out of
+    range (latitude -90..90, longitude -180..180).
+    """
+    params = urllib.parse.parse_qs(query, keep_blank_values=True)
+    try:
+        lat_raw = params.get("lat", [None])[0]
+        lon_raw = params.get("lon", [None])[0]
+        lat = WEATHER_DEFAULT_LAT if lat_raw in (None, "") else float(lat_raw)
+        lon = WEATHER_DEFAULT_LON if lon_raw in (None, "") else float(lon_raw)
+    except (TypeError, ValueError):
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    return lat, lon
+
+
 class ChristmasCountdownHandler(BaseHTTPRequestHandler):
     """Request handler serving the countdown page and a JSON endpoint."""
 
@@ -406,6 +587,17 @@ class ChristmasCountdownHandler(BaseHTTPRequestHandler):
             return 200, body, "text/html; charset=utf-8", _content_security_policy(nonce)
         if path == "/api/countdown":
             body = json.dumps(countdown_summary(self._today())).encode("utf-8")
+            return 200, body, "application/json; charset=utf-8", _content_security_policy()
+        if path == "/api/weather":
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            coords = _parse_weather_coords(query)
+            if coords is None:
+                body = json.dumps(
+                    {"error": "Invalid coordinates: expected ?lat=-90..90&lon=-180..180"}
+                ).encode("utf-8")
+                return 400, body, "application/json; charset=utf-8", _content_security_policy()
+            lat, lon = coords
+            body = json.dumps(weather_summary(lat, lon)).encode("utf-8")
             return 200, body, "application/json; charset=utf-8", _content_security_policy()
         if path == "/healthz":
             return 200, b'{"status": "ok"}', "application/json; charset=utf-8", _content_security_policy()
