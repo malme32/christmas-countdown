@@ -14,11 +14,16 @@ from http.client import HTTPMessage
 from christmas_countdown import (
     WeatherCache,
     WEATHER_CODES,
+    _dominant_weather_code,
+    _parse_daily_forecast,
     _parse_weather_coords,
     _render_weather_section,
+    aggregate_monthly,
+    aggregate_weekly,
     countdown_page,
     countdown_summary,
     create_server,
+    datetime_now_utc_iso,
     fetch_weather,
     is_working_day,
     next_christmas,
@@ -736,7 +741,7 @@ class RenderWeatherSectionTests(unittest.TestCase):
         html = _render_weather_section(_fake_weather_payload())
         self.assertIn('class="weather"', html)
         self.assertIn('class="weather-current"', html)
-        self.assertIn("18.0&deg;C".replace("&deg;", "°") if False else "18.0°C", html)
+        self.assertIn("18.0°C", html)
         self.assertIn("7-day forecast", html)
         self.assertEqual(html.count('class="forecast-card"'), 7)
         self.assertIn("Weekly summary", html)
@@ -896,6 +901,166 @@ class WeatherApiRouteTests(unittest.TestCase):
         self.assertIn('class="weather"', body)
         self.assertIn("CC BY 4.0", body)
         self.assertNotIn("fetch(", body)
+
+
+def _make_daily(
+    dates: list[str],
+    code: int = 1,
+    temp_max: float = 20.0,
+    temp_min: float = 10.0,
+    precip: float = 1.0,
+) -> list[dict]:
+    return [
+        {
+            "date": day,
+            "weathercode": code,
+            "description": "Mainly clear",
+            "temp_max": temp_max,
+            "temp_min": temp_min,
+            "precipitation_sum": precip,
+            "precipitation_probability": 10,
+            "windspeed_max": 9.0,
+        }
+        for day in dates
+    ]
+
+
+class ParseDailyForecastTests(unittest.TestCase):
+    def test_normalises_columns(self) -> None:
+        payload_daily = {
+            "time": ["2026-12-01", "2026-12-02"],
+            "weathercode": [61, 1],
+            "temperature_2m_max": [20.0, 22.0],
+            "temperature_2m_min": [12.0, 13.0],
+            "precipitation_sum": [2.5, 0.0],
+            "precipitation_probability_max": [80, 10],
+            "windspeed_10m_max": [15.0, 10.0],
+        }
+        daily = _parse_daily_forecast(payload_daily)
+        self.assertEqual(len(daily), 2)
+        self.assertEqual(daily[0]["description"], "Slight rain")
+        self.assertEqual(daily[0]["precipitation_sum"], 2.5)
+        self.assertEqual(daily[1]["windspeed_max"], 10.0)
+
+    def test_missing_or_malformed_block_returns_empty(self) -> None:
+        for bad in (None, {}, [], "nope", {"time": []}, {"time": "2026-12-01"}):
+            self.assertEqual(_parse_daily_forecast(bad), [])  # type: ignore[arg-type]
+
+    def test_ragged_columns_default_to_none(self) -> None:
+        daily = _parse_daily_forecast({"time": ["2026-12-01"]})
+        self.assertEqual(len(daily), 1)
+        self.assertIsNone(daily[0]["weathercode"])
+        self.assertEqual(daily[0]["description"], "Unknown")
+        self.assertIsNone(daily[0]["temp_max"])
+        self.assertIsNone(daily[0]["windspeed_max"])
+
+    def test_non_string_dates_skipped(self) -> None:
+        daily = _parse_daily_forecast(
+            {"time": ["2026-12-01", 123, None], "weathercode": [1, 1, 1]}
+        )
+        self.assertEqual([entry["date"] for entry in daily], ["2026-12-01"])
+
+    def test_non_integer_code_is_unknown(self) -> None:
+        daily = _parse_daily_forecast({"time": ["2026-12-01"], "weathercode": ["1"]})
+        self.assertIsNone(daily[0]["weathercode"])
+        self.assertEqual(daily[0]["description"], "Unknown")
+
+
+class DominantWeatherCodeTests(unittest.TestCase):
+    def test_mode_wins(self) -> None:
+        self.assertEqual(_dominant_weather_code([1, 61, 1, 3, 1]), 1)
+
+    def test_tie_goes_to_first_seen(self) -> None:
+        self.assertEqual(_dominant_weather_code([61, 1]), 61)
+        self.assertEqual(_dominant_weather_code([1, 61]), 1)
+
+    def test_empty_returns_none(self) -> None:
+        self.assertIsNone(_dominant_weather_code([]))
+
+
+class AggregateWeeklyTests(unittest.TestCase):
+    def test_chunks_into_seven_day_weeks(self) -> None:
+        dates = [f"2026-12-{day:02d}" for day in range(1, 9)]
+        weeks = aggregate_weekly(_make_daily(dates))
+        self.assertEqual(len(weeks), 2)
+        self.assertEqual(weeks[0]["week_start"], "2026-12-01")
+        self.assertEqual(weeks[0]["days"], 7)
+        self.assertEqual(weeks[1]["week_start"], "2026-12-08")
+        self.assertEqual(weeks[1]["days"], 1)
+
+    def test_averages_and_totals(self) -> None:
+        dates = [f"2026-12-{day:02d}" for day in range(1, 8)]
+        weeks = aggregate_weekly(_make_daily(dates))
+        self.assertEqual(weeks[0]["temp_avg"], 15.0)
+        self.assertEqual(weeks[0]["precipitation_total"], 7.0)
+        self.assertEqual(weeks[0]["weather_dominant"], 1)
+        self.assertEqual(weeks[0]["description"], "Mainly clear")
+
+    def test_missing_values_excluded(self) -> None:
+        daily = _make_daily(["2026-12-01", "2026-12-02"])
+        daily[1]["temp_max"] = None
+        daily[1]["precipitation_sum"] = None
+        weeks = aggregate_weekly(daily)
+        self.assertEqual(weeks[0]["temp_avg"], 15.0)
+        self.assertEqual(weeks[0]["precipitation_total"], 1.0)
+
+    def test_empty_returns_empty(self) -> None:
+        self.assertEqual(aggregate_weekly([]), [])
+
+
+class AggregateMonthlyTests(unittest.TestCase):
+    def test_groups_by_calendar_month_sorted(self) -> None:
+        daily = _make_daily(["2027-01-01", "2026-12-30", "2026-12-31"])
+        months = aggregate_monthly(daily)
+        self.assertEqual([m["month"] for m in months], ["2026-12", "2027-01"])
+        self.assertEqual(months[0]["days"], 2)
+        self.assertEqual(months[1]["days"], 1)
+        self.assertEqual(months[0]["temp_avg"], 15.0)
+        self.assertEqual(months[0]["precipitation_total"], 2.0)
+
+    def test_malformed_dates_bucketed_as_unknown(self) -> None:
+        daily = _make_daily(["2026-12-01"])
+        daily.append(
+            {
+                "date": None,
+                "weathercode": 1,
+                "description": "Mainly clear",
+                "temp_max": 20.0,
+                "temp_min": 10.0,
+                "precipitation_sum": 0.0,
+                "precipitation_probability": 0,
+                "windspeed_max": 5.0,
+            }
+        )
+        months = aggregate_monthly(daily)
+        self.assertEqual([m["month"] for m in months], ["2026-12", "unknown"])
+
+    def test_empty_returns_empty(self) -> None:
+        self.assertEqual(aggregate_monthly([]), [])
+
+
+class WeatherCacheEvictionTests(unittest.TestCase):
+    def test_oldest_entry_evicted_when_bound_exceeded(self) -> None:
+        cache = WeatherCache(ttl=60, max_entries=1)
+        cache.set(1.0, 1.0, {"temp": 1})
+        cache.set(2.0, 2.0, {"temp": 2})
+        self.assertIsNone(cache.get(1.0, 1.0))
+        self.assertEqual(cache.get(2.0, 2.0), {"temp": 2})
+
+    def test_default_cache_stores_many_entries(self) -> None:
+        cache = WeatherCache(ttl=60)
+        for i in range(10):
+            cache.set(float(i), float(i), {"temp": i})
+        for i in range(10):
+            self.assertEqual(cache.get(float(i), float(i)), {"temp": i})
+
+
+class DatetimeNowUtcIsoTests(unittest.TestCase):
+    def test_returns_timezone_aware_iso_string(self) -> None:
+        from datetime import datetime
+
+        parsed = datetime.fromisoformat(datetime_now_utc_iso())
+        self.assertIsNotNone(parsed.tzinfo)
 
 
 if __name__ == "__main__":
