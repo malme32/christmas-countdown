@@ -83,6 +83,41 @@ Weather data © Open-Meteo (CC BY 4.0). The rendered page footer and API
 `source` field credit `open-meteo`; see <https://open-meteo.com/> and
 <https://creativecommons.org/licenses/by/4.0/>.
 
+### Operations (production readiness)
+
+- **Production behaviour:** no API key, env vars, or CLI flags are needed for
+  weather. Upstream timeout is 10 s (`fetch_weather(timeout=...)`); on any
+  upstream or payload failure the API returns `200` with an `error` object
+  (never a 5xx) and `GET /` renders a "Weather currently unavailable."
+  fallback section, so the countdown stays up when Open-Meteo is down.
+- **Rate limits:** Open-Meteo's free API needs no key and is rate-limited
+  server-side. This app calls it at most once per `(lat, lon)` per 10 minutes
+  (`WEATHER_CACHE_TTL = 600`, thread-safe `WeatherCache`); cache hits serve
+  from memory with no upstream call. The cache is bounded to 128 entries
+  (oldest-timestamp eviction) and coordinates are validated
+  (`lat -90..90`, `lon -180..180`, `400` otherwise), so cycling `?lat=`/`?lon=`
+  cannot grow memory or fan out to upstream.
+- **Monitoring and logging:** access logs go to stderr
+  (`ChristmasCountdownHandler.log_message`); every weather upstream failure
+  logs one stderr line (`weather unavailable lat=.. lon=..: <reason>`) via
+  `weather_summary()`. Liveness: `GET /healthz` returns `{"status": "ok"}`
+  without touching upstream. Alert on a rising rate of `weather unavailable`
+  lines or on `/healthz` non-200.
+- **Rollback:** the weather feature is additive (new functions, one new route,
+  one optional template section). Roll back with `git revert <commit>` (or
+  check out the pre-weather commit) and restart:
+  `pkill -f 'christmas_countdown.py'`, then
+  `python3 christmas_countdown.py --host 127.0.0.1 --port 8000`.
+  No migrations, no external state; the in-memory cache is lost on restart.
+- **Performance benchmarks** (measured 2026-09-21, local, no network except
+  where noted): `countdown_summary` ~0.10 ms/op, `countdown_page` with full
+  16-day weather ~0.04 ms/op (~0.006 ms/op fallback), `aggregate_weekly`
+  ~0.020 ms/op, `aggregate_monthly` ~0.013 ms/op, `WeatherCache.get` hit
+  ~0.0005 ms/op. Live smoke (pinned date 2026-09-21): `/healthz` ~26 ms,
+  `/api/countdown` ~1 ms, `/api/weather` first fetch ~660 ms (upstream),
+  cache hit ~0.003 ms, `GET /` with warm cache ~644 ms first page (one
+  upstream fetch) then cache-speed.
+
 ## Defined behaviour
 
 - The target is the next **25 December** on or after today; on Christmas Day the

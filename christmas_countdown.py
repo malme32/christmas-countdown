@@ -471,7 +471,8 @@ def weather_summary(
 ) -> dict:
     """Return weather data with error handling for API failures.
 
-    Never raises: any fetch or payload error is returned as an ``error`` dict.
+    Never raises: any fetch or payload error is logged to stderr and returned
+    as an ``error`` dict.
     """
     try:
         return fetch_weather(lat, lon, timeout=timeout)
@@ -483,6 +484,7 @@ def weather_summary(
         AttributeError,
         TypeError,
     ) as exc:
+        sys.stderr.write(f"weather unavailable lat={lat} lon={lon}: {exc}\n")
         return {"error": str(exc), "latitude": lat, "longitude": lon}
 
 
